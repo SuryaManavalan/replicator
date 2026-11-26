@@ -1,0 +1,4 @@
+0s   dashboard, static
+3s   Revenue $48,210 -> $49,105
+6s   new order row #1043 Robert Fox $310.00 Pending inserted at the top (rows shift down)
+9s   #1041 status Pending -> Shipped

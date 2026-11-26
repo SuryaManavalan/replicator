@@ -119,7 +119,16 @@ def table(x, y, cols, rows, size=16, pitch=50) -> Table:
     return Table(x, y, math.ceil(w), round(h), list(cols), [list(r) for r in rows], {"size": size})
 
 
-def scene_dashboard() -> Board:
+DASH_ROWS = [
+    ("Order", "Customer", "Amount", "Status"),
+    ("#1042", "Jane Cooper", "$120.00", "Shipped"),
+    ("#1041", "Wade Warren", "$89.50", "Pending"),
+    ("#1040", "Esther Howard", "$240.00", "Shipped"),
+    ("#1039", "Cameron Lee", "$15.99", "Refunded"),
+]
+
+
+def scene_dashboard(revenue="$48,210", rows=None) -> Board:
     topbar = rect(None, 0, 0, 1280, 64, [
         text("Acme Analytics", 24, 18, 22, bold=True),
         text("Settings", 1000, 22, 18),
@@ -132,18 +141,12 @@ def scene_dashboard() -> Board:
         text("Help", 24, 740, 18),
     ], stroke="gray")
     cards = []
-    for i, (title, value) in enumerate([("Revenue", "$48,210"), ("Active users", "1,204"), ("Churn", "2.1%")]):
+    for i, (title, value) in enumerate([("Revenue", revenue), ("Active users", "1,204"), ("Churn", "2.1%")]):
         x = 260 + i * 330
         cards.append(rect(None, x, 160, 300, 140, [
             text(title, x + 20, 180, 18), text(value, x + 20, 220, 36, bold=True),
         ], stroke="gray"))
-    rows = [
-        ("Order", "Customer", "Amount", "Status"),
-        ("#1042", "Jane Cooper", "$120.00", "Shipped"),
-        ("#1041", "Wade Warren", "$89.50", "Pending"),
-        ("#1040", "Esther Howard", "$240.00", "Shipped"),
-        ("#1039", "Cameron Lee", "$15.99", "Refunded"),
-    ]
+    rows = rows or DASH_ROWS
     orders = rect(None, 260, 340, 960, 400, [
         text("Recent orders", 280, 360, 20, bold=True),
         table(280, 420, [280, 420, 680, 900], rows),
@@ -151,17 +154,24 @@ def scene_dashboard() -> Board:
     return Board(1280, 800, [topbar, sidebar, text("Overview", 260, 96, 30, bold=True), *cards, orders], [])
 
 
-def scene_kanban() -> Board:
-    columns = [
-        ("To Do", "yellow", ["Write onboarding docs", "Fix login redirect", "Add CSV export"]),
-        ("In Progress", "blue", ["Payment retries", "Dark mode"]),
-        ("Done", "green", ["Upgrade to Node 22", "Rate limiter", "Audit logging"]),
-    ]
+KANBAN = [
+    ("To Do", "yellow", ["Write onboarding docs", "Fix login redirect", "Add CSV export"]),
+    ("In Progress", "blue", ["Payment retries", "Dark mode"]),
+    ("Done", "green", ["Upgrade to Node 22", "Rate limiter", "Audit logging"]),
+]
+
+
+def scene_kanban(columns=None, floating=None) -> Board:
+    """floating: (label, color, x, y) for a card being dragged, drawn on top."""
+    columns = columns or KANBAN
     items = [text("Sprint 14", 40, 30, 32, bold=True)]
     for i, (title, color, cards) in enumerate(columns):
         x = 40 + i * 410
         kids = [rect(c, x + 20, 160 + j * 90, 340, 70, fill=color) for j, c in enumerate(cards)]
         items.append(rect(title, x, 100, 380, 660, kids, fill="gray"))
+    if floating:
+        label, color, fx, fy = floating
+        items.append(rect(label, fx, fy, 340, 70, fill=color))
     return Board(1280, 800, items, [])
 
 

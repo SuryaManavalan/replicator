@@ -1,0 +1,7 @@
+0s   title "Order Flow"
+2s   + Receive order
+4s   + Check stock, arrow from Receive order
+6s   + In stock? diamond, arrow from Check stock
+8s   + Ship order, arrow "yes"
+10s  + Notify customer, arrow "no"
+12s  + note "SLA: ship within 24h"

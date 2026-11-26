@@ -30,3 +30,13 @@ main { flex: 1; display: grid; grid-template-columns: minmax(360px, 2fr) 3fr; mi
 @media (max-width: 800px) {
   main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
 }
+
+.player { display: inline-flex; align-items: center; gap: 8px; }
+.player button { border: 1px solid #ced4da; background: #fff; border-radius: 6px; padding: 2px 10px; cursor: pointer; font: inherit; }
+.player input[type="range"] { width: 220px; }
+.player .time { color: #495057; font-variant-numeric: tabular-nums; min-width: 110px; }
+.events { overflow: auto; min-height: 0; padding: 8px 12px; background: #fff; }
+.events .event { border-left: 3px solid #dee2e6; padding: 2px 10px; margin: 6px 0; }
+.events .event.latest { border-left-color: #1971c2; background: #e7f5ff; }
+.events .head { font: 600 12px ui-monospace, Menlo, monospace; color: #495057; }
+.events pre { margin: 2px 0 0; font: 12px/1.45 ui-monospace, "Cascadia Code", Menlo, monospace; white-space: pre-wrap; }

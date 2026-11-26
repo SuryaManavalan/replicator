@@ -76,6 +76,29 @@ rect @202,266 750x312 [stroke=gray]
     "#1042" | "Jane Cooper" | "$120.00" | "Shipped"
 ```
 
+## Live stream (video / screen capture)
+
+A changing screen becomes a stream of timestamped events:
+
+```
+@00:00 KEY
+board 1000x625
+… full snapshot …
+
+@00:03 Δ
+~ "$48,210" -> "$49,105"
+@00:06 Δ
++ row "#1043" | "Robert Fox" | "$310.00" | "Pending"
+@00:09 Δ
+~ "Pending" -> "Shipped" (row "#1041")
+```
+
+- `KEY`: a full snapshot (first frame, or when so much changed that a list of changes would be harder to read).
+- `Δ`: only what changed. `~ old -> new` changed in place (a table cell names its row), `+` added (printed with its position), `-` removed, `>` moved (new position). Edges appear as `+`/`-` edge lines.
+- Seconds where nothing changed produce nothing. Icons, icon runs and groups aren't announced.
+- A change is announced only if it still holds in a second frame shortly after (default 0.5 s): a cursor crossing a label or a card mid-drag is never announced.
+- Consumers can always read the current full state (`state.board`), so nobody has to replay deltas.
+
 ## Open questions (to iterate on)
 
 - Should geometry be absolute, or relative to the parent? Relative may read better for nested content.

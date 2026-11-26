@@ -1,0 +1,4 @@
+0s   kanban, static
+4s   card "Dark mode" dragged from In Progress ...
+5s   ... dropped at the bottom of Done
+8s   new card "Write tests" added to To Do

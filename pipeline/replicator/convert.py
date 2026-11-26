@@ -65,18 +65,27 @@ DEBUG_CONN = False
 _engine = None
 
 
-def ocr(img: np.ndarray) -> list[Word]:
-    key = hashlib.sha1(img.tobytes()).hexdigest()[:16]
-    cached = CACHE / f"ocr-{key}.json"
-    if cached.exists():
-        return [Word(**d) for d in json.loads(cached.read_text())]
-    r = _get_engine()(img)
+def run_ocr(img: np.ndarray, dx: int = 0, dy: int = 0, crop: bool = False) -> list[Word]:
+    """OCR an image (or a crop of one, offset by dx, dy). No caching.
+    crop=True uses an engine that never upscales small inputs: the default
+    upscales to a 736px minimum side, which is slow and splits words differently."""
+    r = (_get_crop_engine() if crop else _get_engine())(img)
     words = []
     if r.boxes is not None:
         for box, txt, score in zip(r.boxes, r.txts, r.scores):
             xs, ys = box[:, 0], box[:, 1]
-            words.append(Word(txt.strip(), int(xs.min()), int(ys.min()),
+            words.append(Word(txt.strip(), int(xs.min()) + dx, int(ys.min()) + dy,
                               int(xs.max() - xs.min()), int(ys.max() - ys.min()), float(score)))
+    return words
+
+
+def ocr(img: np.ndarray) -> list[Word]:
+    """Whole-image OCR, cached on disk by image hash (for stills)."""
+    key = hashlib.sha1(img.tobytes()).hexdigest()[:16]
+    cached = CACHE / f"ocr-{key}.json"
+    if cached.exists():
+        return [Word(**d) for d in json.loads(cached.read_text())]
+    words = run_ocr(img)
     CACHE.mkdir(exist_ok=True)
     cached.write_text(json.dumps([w.__dict__ for w in words]))
     return words
@@ -121,6 +130,23 @@ def mark_bold(gray: np.ndarray, words: list[Word]) -> None:
     med = float(np.median(vals))
     for w, r in zip(words, ratios):
         w.bold = r is not None and r > 1.3 * med
+
+
+_crop_engine = None
+
+
+def _get_crop_engine():
+    global _crop_engine
+    if _crop_engine is None:
+        from rapidocr import LangRec, ModelType, OCRVersion, RapidOCR
+        _crop_engine = RapidOCR(params={
+            "Global.log_level": "error", "Global.use_cls": False,
+            "Det.ocr_version": OCRVersion.PPOCRV5, "Det.model_type": ModelType.MOBILE,
+            "Det.limit_type": "max", "Det.limit_side_len": 2000,  # keep the crop at native scale
+            "Rec.ocr_version": OCRVersion.PPOCRV5, "Rec.model_type": ModelType.MOBILE,
+            "Rec.lang_type": LangRec.EN,
+        })
+    return _crop_engine
 
 
 def all_words(words: list[Word]) -> list[Word]:
@@ -1114,7 +1140,9 @@ class Result:
     connectors: list
 
 
-def convert(img: np.ndarray) -> Result:
+def convert(img: np.ndarray, raw_words: list[Word] | None = None) -> Result:
+    """Screenshot -> Board. Pass raw_words to supply OCR yourself (e.g. the
+    video runner's incremental OCR); otherwise the whole image is OCR'd."""
     import time
     t0 = time.perf_counter()
     timings: dict[str, float] = {}
@@ -1126,7 +1154,7 @@ def convert(img: np.ndarray) -> Result:
         t0 = t
 
     H, W = img.shape[:2]
-    raw = ocr(img)
+    raw = [Word(**w.__dict__) for w in raw_words] if raw_words is not None else ocr(img)
     lap("ocr")
     glyphs = all_words(raw)
     # icons misread as a glyph or two, whatever OCR's confidence
