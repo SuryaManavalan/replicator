@@ -93,14 +93,19 @@ def main():
     rows = []
     print(f"{'video':22} {'theme':5} {'viewport':11} {'recall':>7} {'prec':>6} {'steps':>6} {'events':>6} {'avg ms':>7} {'max ms':>7}")
     for n in names:
-        r = score(n, args.interval)
+        try:
+            r = score(n, args.interval)
+        except Exception as e:  # one broken video shouldn't stop the run
+            print(f"{n:22} ERROR {type(e).__name__}: {e}", flush=True)
+            rows.append({"name": n, "error": f"{type(e).__name__}: {e}"})
+            continue
         rows.append(r)
         f = lambda v: "  -  " if v is None else f"{v:.2f}"
         vp = "x".join(map(str, r["viewport"]))
         note = " (canvas)" if r["canvas"] else ""
         print(f"{n:22} {r['theme']:5} {vp:11} {f(r['recall']):>7} {f(r['precision']):>6} {r['processed']:>3}/{r['steps']:<2} "
               f"{r['events']:>6} {r['avg_ms'] or 0:>7} {r['max_ms'] or 0:>7}{note}", flush=True)
-    scored = [r for r in rows if r["recall"] is not None and not r["canvas"]]
+    scored = [r for r in rows if r.get("recall") is not None and not r["canvas"]]
     if scored:
         print(f"\nmean recall {sum(r['recall'] for r in scored) / len(scored):.3f}   "
               f"mean precision {sum(r['precision'] for r in scored) / len(scored):.3f}   "

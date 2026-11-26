@@ -205,7 +205,7 @@ def diff(old: Board, new: Board, key_ratio: float = 0.5) -> list[str] | None:
     for o, e in sorted(moved, key=lambda p: (p[1].y - p[0].y, p[1].x - p[0].x)):
         dx, dy = e.x - o.x, e.y - o.y
         c = clusters[-1] if clusters else None
-        if c and abs(dy - c[0][2]) <= tol and abs(dx - c[0][1]) <= tol:
+        if c and abs(dy - c[0][3]) <= tol and abs(dx - c[0][2]) <= tol:
             c.append((o, e, dx, dy))
         else:
             clusters.append([(o, e, dx, dy)])
