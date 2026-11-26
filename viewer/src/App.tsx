@@ -5,21 +5,36 @@ import "@excalidraw/excalidraw/index.css";
 import { parse } from "./board/parse";
 import { toSkeletons } from "./board/toExcalidraw";
 
-// Every samples/**/NAME.board, paired with NAME.png when present.
+// Samples: samples/**/NAME.png with optional NAME.board (ground truth) and
+// NAME.pred.board (converter output).
 const boards = import.meta.glob("../../samples/**/*.board", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
 const images = import.meta.glob("../../samples/**/*.png", { query: "?url", import: "default", eager: true }) as Record<string, string>;
 
-const samples = Object.keys(boards)
-  .sort()
-  .map((path) => ({
-    name: path.replace("../../samples/", "").replace(/\.board$/, ""),
-    board: boards[path],
-    image: images[path.replace(/\.board$/, ".png")],
-  }));
+type Version = "converted" | "truth";
+interface Sample { name: string; image?: string; versions: Partial<Record<Version, string>> }
+
+const samples: Sample[] = (() => {
+  const byName = new Map<string, Sample>();
+  const get = (name: string) => {
+    if (!byName.has(name)) byName.set(name, { name, versions: {} });
+    return byName.get(name)!;
+  };
+  const strip = (p: string) => p.replace("../../samples/", "");
+  for (const [p, url] of Object.entries(images)) get(strip(p).replace(/\.png$/, "")).image = url;
+  for (const [p, text] of Object.entries(boards)) {
+    const n = strip(p);
+    if (n.endsWith(".pred.board")) get(n.replace(/\.pred\.board$/, "")).versions.converted = text;
+    else get(n.replace(/\.board$/, "")).versions.truth = text;
+  }
+  return [...byName.values()].filter((s) => Object.keys(s.versions).length).sort((a, b) => a.name.localeCompare(b.name));
+})();
+
+const firstVersion = (s?: Sample): Version => (s?.versions.converted !== undefined ? "converted" : "truth");
 
 export default function App() {
   const [index, setIndex] = useState(0);
-  const [text, setText] = useState(samples[0]?.board ?? "board 1280x800\n");
+  const [version, setVersion] = useState<Version>(firstVersion(samples[0]));
+  const [text, setText] = useState(samples[0]?.versions[firstVersion(samples[0])] ?? "board 1280x800\n");
   const [sketchy, setSketchy] = useState(true);
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null);
   // Excalidraw measures text when elements are created; re-create them once
@@ -51,9 +66,12 @@ export default function App() {
     api.scrollToContent(elements, { fitToContent: true });
   }, [api, skeletons, fontEpoch]);
 
-  const pick = (i: number) => {
+  const pick = (i: number, v?: Version) => {
+    const s = samples[i];
+    const ver = v && s.versions[v] !== undefined ? v : firstVersion(s);
     setIndex(i);
-    setText(samples[i].board);
+    setVersion(ver);
+    setText(s.versions[ver] ?? "");
   };
 
   return (
@@ -65,6 +83,14 @@ export default function App() {
             <option key={s.name} value={i}>{s.name}</option>
           ))}
         </select>
+        <div className="seg">
+          {(["converted", "truth"] as Version[]).map((v) => (
+            <button key={v} className={v === version ? "on" : ""} disabled={sample?.versions[v] === undefined}
+              onClick={() => pick(index, v)}>
+              {v === "truth" ? "expected" : v}
+            </button>
+          ))}
+        </div>
         <label>
           <input type="checkbox" checked={sketchy} onChange={(e) => setSketchy(e.target.checked)} /> sketchy
         </label>

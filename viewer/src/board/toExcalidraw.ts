@@ -126,8 +126,12 @@ export function toSkeletons(board: Board, opts: RenderOptions): ConvertResult {
   const visit = (n: BoardNode) => {
     const b = boxes.get(n)!;
     if (n.type === "text") {
-      const lines = n.text.split("\n").length;
-      const fontSize = Math.max(8, Math.min(120, b.h / (lines * LINE_HEIGHT)));
+      const lines = n.text.split("\n");
+      const byHeight = b.h / (lines.length * LINE_HEIGHT);
+      // Excalidraw's fonts are wider than most screen fonts: also fit the width.
+      const longest = Math.max(...lines.map((l) => l.length), 1);
+      const byWidth = n.geom?.w ? n.geom.w / (longest * (opts.sketchy ? 0.5 : 0.48)) : Infinity;
+      const fontSize = Math.max(8, Math.min(120, byHeight, byWidth));
       skeletons.push({
         type: "text", x: b.x, y: b.y, text: n.text, fontSize, fontFamily,
         strokeColor: color(STROKE, n.style.color) ?? "#1e1e1e",

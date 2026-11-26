@@ -1,0 +1,19 @@
+board 1280x800
+
+"System Architecture" @36,30 378x40
+"Backend" @321,128 105x31
+rect "API Gateway" @353,193 185x75 [fill=violet]
+rect "Auth Service" @658,188 194x84
+ellipse "Redis" @988,173 204x114 [fill=red]
+"verify JWT" @540,212 122x34
+rect "Web App" @58,328 184x94 [fill=blue]
+rect "Orders Service" @348,418 194x84
+rect "Billing Service" @658,418 194x84
+ellipse "Postgres" @988,403 204x114 [fill=green]
+"invoice" @544,446 115x27
+"TODO: add rate limiting" @36,714 216x31
+
+"Billing Service" -> "Postgres" : "SQL"
+"Auth Service" -> "Redis" : "sessions"
+"Web App" -> "API Gateway" : "HTTPS"
+"API Gateway" -> "Orders Service"

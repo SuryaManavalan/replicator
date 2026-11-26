@@ -1,0 +1,14 @@
+board 1280x800
+
+"Order Flow" @56,36 209x44
+rect "Receive order" @78,298 184x84 [fill=blue]
+rect "Check stock" @338,298 184x84
+diamond "In stock?" @599,279 182x123 [fill=yellow]
+rect "Ship order" @898,298 184x84 [fill=green]
+"SLA: ship within 24h" @896,415 187x30
+rect "Notify customer" @598,558 184x84 [fill=red]
+
+"In stock?" -> "Notify customer" : "no"
+"In stock?" -> "Ship order" : "yes"
+"Check stock" -> "In stock?"
+"Receive order" -> "Check stock"

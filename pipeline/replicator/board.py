@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -86,22 +87,31 @@ def _walk(items):
             yield from _walk(n.children)
 
 
+def _slug(label: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")[:24].strip("-")
+    if not slug:
+        return "shape"
+    return slug if slug[0].isalpha() else f"n{slug}"
+
+
 def serialize(board: Board) -> str:
     shapes = [n for n in _walk(board.items) if isinstance(n, Shape)]
     label_counts = Counter(s.label for s in shapes if s.label)
     referenced = {id(e.src) for e in board.edges} | {id(e.dst) for e in board.edges}
 
-    # Assign ids only where the label can't serve as identifier.
+    # Assign ids only where the label can't serve as identifier, derived from
+    # the label when possible so they stay readable ("n3", "api-gateway-2").
     used = {s.id for s in shapes if s.id}
-    n = 0
     for s in shapes:
         needs = id(s) in referenced and (not s.label or label_counts[s.label] > 1)
         if needs and not s.id:
-            n += 1
-            while f"s{n}" in used:
-                n += 1
-            s.id = f"s{n}"
-            used.add(s.id)
+            base = _slug(s.label) if s.label else s.kind
+            cand, k = base, 1
+            while cand in used:
+                k += 1
+                cand = f"{base}-{k}"
+            s.id = cand
+            used.add(cand)
 
     def ref(s: Shape) -> str:
         return s.id if s.id else quote(s.label)  # type: ignore[arg-type]
