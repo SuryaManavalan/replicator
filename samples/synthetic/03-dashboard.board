@@ -1,44 +1,35 @@
-board 1280x800
+board 1000x625
 
-rect @0,0 1280x64 [fill=gray stroke=gray]
-  "Acme Analytics" @24,18 190x28 [bold]
-  "Settings" @1060,22 74x22
-  "Log out" @1170,22 68x22
-rect @0,64 220x736 [stroke=gray]
-  "Overview" @24,96 95x22 [bold]
-  "Reports" @24,140 70x22
-  "Customers" @24,184 97x22
-  "Billing" @24,228 56x22
-  "Help" @24,740 42x22
-"Overview" @260,96 159x38 [bold]
-rect @260,160 300x140 [stroke=gray]
-  "Revenue" @280,180 79x22
-  "$48,210" @280,220 164x45 [bold]
-rect @590,160 300x140 [stroke=gray]
-  "Active users" @610,180 111x22
-  "1,204" @610,220 114x45 [bold]
-rect @920,160 300x140 [stroke=gray]
-  "Churn" @940,180 54x22
-  "2.1%" @940,220 100x45 [bold]
-rect @260,340 960x400 [stroke=gray]
-  "Recent orders" @280,360 159x25 [bold]
-  "Order" @280,420 52x20 [bold]
-  "Customer" @420,420 87x20 [bold]
-  "Amount" @680,420 71x20 [bold]
-  "Status" @900,420 59x20 [bold]
-  "#1042" @280,470 55x20
-  "Jane Cooper" @420,470 97x20
-  "$120.00" @680,470 67x20
-  "Shipped" @900,470 66x20
-  "#1041" @280,520 55x20
-  "Wade Warren" @420,520 107x20
-  "$89.50" @680,520 57x20
-  "Pending" @900,520 64x20
-  "#1040" @280,570 55x20
-  "Esther Howard" @420,570 118x20
-  "$240.00" @680,570 67x20
-  "Shipped" @900,570 66x20
-  "#1039" @280,620 55x20
-  "Cameron Lee" @420,620 107x20
-  "$15.99" @680,620 57x20
-  "Refunded" @900,620 77x20
+rect @0,0 1000x50 [fill=gray stroke=gray]
+  "Acme Analytics" @19,14 148x22 [bold]
+  "Settings" @781,17 58x17
+  "Log out" @867,17 53x17
+  image @948,8 34x34
+rect @0,50 172x575 [stroke=gray]
+  icon @19,76 16x16
+  "Overview" @44,75 74x17 [bold]
+  icon @19,110 16x16
+  "Reports" @44,109 55x17
+  icon @19,145 16x16
+  "Customers" @44,144 76x17
+  icon @19,179 16x16
+  "Billing" @44,178 44x17
+  "Help" @19,578 33x17
+"Overview" @203,75 124x30 [bold]
+rect @203,125 234x109 [stroke=gray]
+  "Revenue" @219,141 62x17
+  "$48,210" @219,172 128x35 [bold]
+rect @203,266 750x312 [stroke=gray]
+  "Recent orders" @219,281 124x20 [bold]
+  table @219,328 545x172 cols 219,328,531,703 [size=12]
+    "Order" | "Customer" | "Amount" | "Status"
+    "#1042" | "Jane Cooper" | "$120.00" | "Shipped"
+    "#1041" | "Wade Warren" | "$89.50" | "Pending"
+    "#1040" | "Esther Howard" | "$240.00" | "Shipped"
+    "#1039" | "Cameron Lee" | "$15.99" | "Refunded"
+rect @461,125 234x109 [stroke=gray]
+  "Active users" @477,141 87x17
+  "1,204" @477,172 89x35 [bold]
+rect @719,125 234x109 [stroke=gray]
+  "Churn" @734,141 42x17
+  "2.1%" @734,172 78x35 [bold]

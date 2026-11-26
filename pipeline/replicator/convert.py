@@ -26,7 +26,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .board import Board, Edge, Shape, Text, serialize
+from .board import Board, Edge, Shape, Table, Text, scale_board, serialize
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / ".cache"
@@ -60,6 +60,7 @@ class Word:
     def cy(self): return self.y + self.h / 2
 
 
+DEBUG_CONN = False
 _engine = None
 
 
@@ -73,6 +74,7 @@ def ocr(img: np.ndarray) -> list[Word]:
         from rapidocr import LangRec, ModelType, OCRVersion, RapidOCR
         _engine = RapidOCR(params={
             "Global.log_level": "error",
+            "Global.use_cls": False,  # screens are never rotated; saves ~0.5 s
             "Det.ocr_version": OCRVersion.PPOCRV5, "Det.model_type": ModelType.MOBILE,
             "Rec.ocr_version": OCRVersion.PPOCRV5, "Rec.model_type": ModelType.MOBILE,
             "Rec.lang_type": LangRec.EN,
@@ -87,6 +89,12 @@ def ocr(img: np.ndarray) -> list[Word]:
     CACHE.mkdir(exist_ok=True)
     cached.write_text(json.dumps([w.__dict__ for w in words]))
     return words
+
+
+def all_words(words: list[Word]) -> list[Word]:
+    """Every plausible OCR box, including ones too unsure to keep as text: used
+    for erasing glyphs so they don't come back as icons or shapes."""
+    return [w for w in words if w.score >= 0.3]
 
 
 def clean_words(words: list[Word]) -> list[Word]:
@@ -130,7 +138,8 @@ def erase_text(img: np.ndarray, words: list[Word], pad=3) -> np.ndarray:
         for i in range(1, n):
             cx, cy, cw, ch = stats[i, :4]
             touches_edge = not (cx > 0 and cy > 0 and cx + cw < bw and cy + ch < bh)
-            thin_stroke = min(cw, ch) <= 3 and max(cw, ch) >= 10  # line/dash piece, not a glyph
+            # horizontal line piece (arrow stub) passing through; vertical stems are glyphs (l, I)
+            thin_stroke = ch <= 3 and cw >= max(10, 0.6 * w.h)
             if not touches_edge and not thin_stroke:
                 erase |= labels == i
         # anti-aliased glyph edges sit just outside the thresholded blob
@@ -301,6 +310,125 @@ def shape_fill(img: np.ndarray, n: Node, bg: np.ndarray) -> str | None:
     return name if dist < 90 else "#%02x%02x%02x" % (int(r), int(g), int(b))
 
 
+# ---------------------------------------------------------------- images + icons
+
+def is_photo(img: np.ndarray, n: Node) -> bool:
+    """Photos/illustrations: many distinct colours and lots of tonal variation."""
+    inset = 3
+    patch = img[n.y + inset:n.y2 - inset, n.x + inset:n.x2 - inset]
+    if patch.shape[0] < 16 or patch.shape[1] < 16:
+        return False
+    step = max(1, int(math.sqrt(patch.shape[0] * patch.shape[1] / 40000)))
+    q = (patch[::step, ::step] >> 4).reshape(-1, 3).astype(np.int32)  # 16 levels per channel
+    counts = np.bincount(q[:, 0] << 8 | q[:, 1] << 4 | q[:, 2], minlength=4096)
+    dominant = counts.max() / counts.sum()  # UI panels are mostly one background colour
+    return np.count_nonzero(counts) > 120 and float(q.std()) > 1.2 and dominant < 0.35
+
+
+def find_icons(clean: np.ndarray, words: list[Word], shapes: list[Node], conns, med_h: float) -> list[Node]:
+    """Small compact ink blobs that aren't text, lines or shape outlines."""
+    ink = _ink(clean)
+    for n in shapes:
+        if n.kind == "image":
+            cv2.rectangle(ink, (n.x - 2, n.y - 2), (n.x2 + 2, n.y2 + 2), 0, -1)
+        elif n.kind == "ellipse":
+            cv2.ellipse(ink, (n.x + n.w // 2, n.y + n.h // 2), (n.w // 2, n.h // 2), 0, 0, 360, 0, 7)
+        else:
+            cv2.rectangle(ink, (n.x, n.y), (n.x2, n.y2), 0, 7)
+            r = int(min(n.w, n.h, 48) / 2)  # rounded corners curve inside the box
+            for cx, cy in ((n.x, n.y), (n.x2 - r, n.y), (n.x, n.y2 - r), (n.x2 - r, n.y2 - r)):
+                ink[cy:cy + r, cx:cx + r] = 0
+    for *_, sg in conns:
+        cv2.line(ink, (int(sg.x0), int(sg.y0)), (int(sg.x1), int(sg.y1)), 0, 9)
+    joined = cv2.dilate(ink, np.ones((5, 5), np.uint8))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(joined, connectivity=8)
+    lo, hi = 0.35 * med_h, 2.4 * med_h
+    icons = []
+    for i in range(1, n):
+        x, y, w, h, area = stats[i]
+        x, y, w, h = x + 2, y + 2, w - 4, h - 4  # undo the dilation
+        if not (lo <= w <= hi and lo <= h <= hi and 0.4 < w / max(h, 1) < 2.5):
+            continue
+        if np.count_nonzero(ink[y:y + h, x:x + w]) < 0.06 * w * h:
+            continue
+        cx, cy = x + w / 2, y + h / 2
+        if any(wd.x <= cx <= wd.x2 and wd.y <= cy <= wd.y2 for wd in words):
+            continue  # leftover text pixels
+        icons.append(Node("icon", int(x), int(y), int(w), int(h)))
+    return icons
+
+
+def misread_icons(words: list[Word], shapes: list[Node]) -> tuple[list[Word], list[Node]]:
+    """A 1-2 character 'word' just left of a real label is usually its icon."""
+    keep, icons = [], []
+    for w in words:
+        short = len(w.text.strip()) <= 3 and w.w < 1.6 * w.h  # icons are squarish
+        if short:
+            sole_label = any(s.contains(w, 2) and s.w < 4 * w.w + 40 for s in shapes)
+            label_right = any(
+                o is not w and len(o.text) >= 3 and o.score >= 0.6 and abs(o.cy - w.cy) < 0.4 * max(o.h, w.h)
+                and -0.5 * w.h <= o.x - w.x2 < 2 * w.h for o in words)
+            if label_right and not sole_label:
+                icons.append(Node("icon", w.x, w.y, w.w, w.h))
+                continue
+        keep.append(w)
+    return keep, icons
+
+
+# ---------------------------------------------------------------- tables
+
+def find_tables(words: list[Word]) -> tuple[list[Table], list[Word]]:
+    """Runs of >=3 rows whose cells line up in >=2 shared columns."""
+    if len(words) < 6:
+        return [], words
+    med_h = float(np.median([w.h for w in words]))
+    rows: list[list[Word]] = []
+    for w in sorted(words, key=lambda w: w.cy):
+        if rows and abs(rows[-1][0].cy - w.cy) < 0.4 * med_h:
+            rows[-1].append(w)
+        else:
+            rows.append([w])
+    for r in rows:
+        r.sort(key=lambda w: w.x)
+
+    tables, used = [], set()
+    i = 0
+    while i < len(rows):
+        if len(rows[i]) < 2:
+            i += 1
+            continue
+        cols = [w.x for w in rows[i]]
+        tol = max(10, 0.8 * med_h)
+        run = [rows[i]]
+        pitch = None
+        for r in rows[i + 1:]:
+            if len(r) < 2 or len(r) > len(cols) + 1:
+                break
+            dy = r[0].cy - run[-1][0].cy
+            if pitch is not None and abs(dy - pitch) > 0.35 * pitch:
+                break
+            if not all(any(abs(w.x - c) < tol for c in cols) for w in r):
+                break
+            pitch = dy
+            run.append(r)
+        if len(run) >= 3:
+            ws = [w for r in run for w in r]
+            x, y = min(w.x for w in ws), min(w.y for w in ws)
+            grid = [["" for _ in cols] for _ in run]
+            for ri, r in enumerate(run):
+                for w in r:
+                    ci = min(range(len(cols)), key=lambda c: abs(cols[c] - w.x))
+                    grid[ri][ci] = (grid[ri][ci] + " " + w.text).strip()
+            size = round(float(np.median([w.h for w in ws])) / 1.25)
+            tables.append(Table(x, y, max(w.x2 for w in ws) - x, max(w.y2 for w in ws) - y,
+                                cols, grid, {"size": size}))
+            used.update(id(w) for w in ws)
+            i += len(run)
+        else:
+            i += 1
+    return tables, [w for w in words if id(w) not in used]
+
+
 # ---------------------------------------------------------------- connectors
 
 @dataclass
@@ -330,45 +458,72 @@ def _inside_any(px, py, shapes, shrink=3) -> bool:
 
 
 def merge_segments(segs: list[Seg], words: list[Word], shapes: list) -> list[Seg]:
-    """Join collinear pieces; allow big gaps only where a text label interrupts the line."""
-    segs = sorted(segs, key=lambda s: -s.length)
-    merged = True
-    while merged:
-        merged = False
-        for i in range(len(segs)):
-            for j in range(i + 1, len(segs)):
-                a, b = segs[i], segs[j]
-                da = abs(a.angle - b.angle)
-                if min(da, math.pi - da) > math.radians(4):
-                    continue
-                d0, t0 = _point_seg_dist(b.x0, b.y0, a)
-                d1, t1 = _point_seg_dist(b.x1, b.y1, a)
-                if max(d0, d1) > 5:
-                    continue
-                lo, hi = sorted((t0, t1))
-                gap = max(0.0, lo - 1, -hi) * a.length
-                if gap > 0:
-                    g0, g1 = (1, lo) if lo > 1 else (hi, 0)
-                    pts = [(a.x0 + t * (a.x1 - a.x0), a.y0 + t * (a.y1 - a.y0))
-                           for t in np.linspace(g0, g1, 9)]
-                    if any(_inside_any(px, py, shapes) for px, py in pts):
-                        continue  # never join lines through a shape
-                if gap > 12:
-                    # bridge only if a word sits in the gap
-                    tm = (1 + lo) / 2 if lo > 1 else hi / 2
-                    gx, gy = a.x0 + tm * (a.x1 - a.x0), a.y0 + tm * (a.y1 - a.y0)
-                    if not any(w.x - 10 <= gx <= w.x2 + 10 and w.y - 10 <= gy <= w.y2 + 10 for w in words):
-                        continue
-                ts = [0, 1, t0, t1]
-                tmin, tmax = min(ts), max(ts)
-                segs[i] = Seg(a.x0 + tmin * (a.x1 - a.x0), a.y0 + tmin * (a.y1 - a.y0),
-                              a.x0 + tmax * (a.x1 - a.x0), a.y0 + tmax * (a.y1 - a.y0))
-                segs.pop(j)
-                merged = True
-                break
-            if merged:
-                break
-    return segs
+    """Join collinear pieces into whole lines.
+
+    Pieces are grouped by direction and perpendicular offset (Hough normal
+    form), then merged along the line in one sorted pass. Small gaps are
+    bridged; big ones only where a text label interrupts the line, and never
+    through a shape.
+    """
+    if not segs:
+        return []
+    ang_tol, off_tol = math.radians(4), 5.0
+    info = []
+    for s in segs:
+        th = s.angle  # [0, pi)
+        nx, ny = -math.sin(th), math.cos(th)
+        info.append((th, s.x0 * nx + s.y0 * ny, s))
+    info.sort(key=lambda t: t[0])
+
+    # cluster: consecutive in angle, then split by offset
+    groups: list[list] = []
+    for t in info:
+        if groups and t[0] - groups[-1][-1][0] <= ang_tol:
+            groups[-1].append(t)
+        else:
+            groups.append([t])
+    if len(groups) > 1 and math.pi - info[-1][0] + info[0][0] <= ang_tol:
+        groups[0] = groups.pop() + groups[0]  # wrap around near 0/180 degrees
+
+    out: list[Seg] = []
+    for g in groups:
+        # angle near 0 and pi flip the normal's sign: normalise each piece's offset to the group's first direction
+        th0 = g[0][0]
+        nx, ny = -math.sin(th0), math.cos(th0)
+        dx, dy = math.cos(th0), math.sin(th0)
+        g = sorted(((s.x0 * nx + s.y0 * ny, s) for _, _, s in g), key=lambda t: t[0])
+        lines: list[list] = []
+        for off, s in g:
+            if lines and off - lines[-1][-1][0] <= off_tol:
+                lines[-1].append((off, s))
+            else:
+                lines.append([(off, s)])
+        for line in lines:
+            off = float(np.median([o for o, _ in line]))
+            spans = sorted((min(a_, b_), max(a_, b_)) for _, s in line
+                           for a_, b_ in [((s.x0 * dx + s.y0 * dy), (s.x1 * dx + s.y1 * dy))])
+            cur = list(spans[0])
+            merged = []
+            for lo, hi in spans[1:]:
+                gap = lo - cur[1]
+                ok = gap <= 12
+                if not ok or gap > 0:
+                    pts = [(t * dx + off * nx, t * dy + off * ny) for t in np.linspace(cur[1], lo, 7)]
+                    through_shape = any(_inside_any(px, py, shapes, shrink=8) for px, py in pts[1:-1])
+                    if not ok and not through_shape:
+                        mx, my = pts[3]
+                        ok = any(w.x - 10 <= mx <= w.x2 + 10 and w.y - 10 <= my <= w.y2 + 10 for w in words)
+                    elif through_shape:
+                        ok = False
+                if ok:
+                    cur[1] = max(cur[1], hi)
+                else:
+                    merged.append(cur)
+                    cur = [lo, hi]
+            merged.append(cur)
+            for lo, hi in merged:
+                out.append(Seg(lo * dx + off * nx, lo * dy + off * ny, hi * dx + off * nx, hi * dy + off * ny))
+    return out
 
 
 def _dist_to_node(px, py, n: Node) -> float:
@@ -466,14 +621,14 @@ def find_connectors(img: np.ndarray, clean: np.ndarray, shapes: list[Node], word
             ts = np.linspace(0, 1, max(int(L / 2), 4))[1:-1]
             xs = (p[0] + ts * (q[0] - p[0])).astype(int).clip(0, W - 1)
             ys = (p[1] + ts * (q[1] - p[1])).astype(int).clip(0, H - 1)
-            others = [n for n in shapes if n is not a and n is not b and not n.contains(a) and not n.contains(b)]
-            if any(_inside_any(x, y, others) for x, y in zip(xs[::4], ys[::4])):
-                continue
             vis = ~text_mask[ys, xs]
-            if vis.sum() < 4:
+            if vis.sum() < 4 or (line_ink[ys, xs][vis] > 0).mean() < 0.85:
                 continue
-            if (line_ink[ys, xs][vis] > 0).mean() >= 0.85:
-                add(a, b, Seg(*p, *q), "direct")
+            # only now (rarely reached) check the path doesn't run through a third shape
+            others = [n for n in shapes if n is not a and n is not b and not n.contains(a) and not n.contains(b)]
+            if any(_inside_any(x, y, others, shrink=8) for x, y in zip(xs[::4], ys[::4])):
+                continue
+            add(a, b, Seg(*p, *q), "direct")
 
     # 2. Hough segments (lines that don't run centre-to-centre)
     ink = _mask_shapes(_ink(clean), shapes, 4)
@@ -485,13 +640,29 @@ def find_connectors(img: np.ndarray, clean: np.ndarray, shapes: list[Node], word
         best = min(shapes, key=lambda n: _dist_to_node(px, py, n), default=None)
         return best if best and _dist_to_node(px, py, best) < 24 else None
 
+    direct = [f[3] for f in found.values() if f[4] == "direct"]
+
+    def along_direct(s: Seg) -> bool:
+        """A piece of a line we already have (e.g. split where it grazes a box)."""
+        for d in direct:
+            da = abs(s.angle - d.angle)
+            if min(da, math.pi - da) > math.radians(4):
+                continue
+            (d0, t0), (d1, t1) = _point_seg_dist(s.x0, s.y0, d), _point_seg_dist(s.x1, s.y1, d)
+            if max(d0, d1) < 10 and -0.05 <= min(t0, t1) and max(t0, t1) <= 1.05:
+                return True
+        return False
+
     for s in segs:
-        if s.length < 20:
+        if s.length < 20 or along_direct(s):
             continue
         a, b = attach(s.x0, s.y0), attach(s.x1, s.y1)
         if a and b and a is not b and not a.contains(b) and not b.contains(a):
             add(a, b, s, "hough")
 
+    if DEBUG_CONN:
+        for a, b, kind, s, src in found.values():
+            print("conn", src, (a.x, a.y), (b.x, b.y), [round(v) for v in (s.x0, s.y0, s.x1, s.y1)])
     return [(a, b, kind, s) for a, b, kind, s, _ in found.values()]
 
 
@@ -523,7 +694,7 @@ def prune(n: Node) -> tuple[list[Node], list[Word]]:
         n.words += loose
     n.kids = kids
     items = len(n.words) + len(kids)
-    if items == 0 and not n.connected:
+    if items == 0 and not n.connected and n.kind not in ("icon", "image"):
         return [], []
     if n.implicit and items <= 1 and not n.connected:
         return kids, n.words  # separates nothing: dissolve
@@ -551,22 +722,27 @@ def merge_lines(words: list[Word]) -> list[Word]:
 
 
 def to_board(root: Node, W: int, H: int, connectors) -> Board:
+    def texts(words: list[Word]):
+        tables, rest = find_tables(words)
+        return [Text(w.text, w.x, w.y, w.w, w.h) for w in merge_lines(rest)] + tables
+
     def build(n: Node) -> Shape:
-        words = merge_lines(n.words)
+        tables, rest = find_tables(n.words)
+        words = merge_lines(rest)
         style = {"fill": n.fill} if n.fill else {}
         if n.implicit:
             style["stroke"] = "gray"
         label = None
-        if not n.implicit and not n.kids and len(words) == 1:
+        if n.kind not in ("image", "icon") and not n.implicit and not n.kids and not tables and len(words) == 1:
             w = words[0]
             if abs(w.cx - (n.x + n.w / 2)) < 0.15 * n.w and abs(w.cy - (n.y + n.h / 2)) < 0.2 * n.h:
                 label, words = w.text, []
         s = Shape(n.kind, n.x, n.y, n.w, n.h, label=label, style=style)
-        s.children = [Text(w.text, w.x, w.y, w.w, w.h) for w in words] + [build(k) for k in n.kids]
+        s.children = [Text(w.text, w.x, w.y, w.w, w.h) for w in words] + tables + [build(k) for k in n.kids]
         n.shape = s
         return s
 
-    items = [Text(w.text, w.x, w.y, w.w, w.h) for w in merge_lines(root.words)]
+    items = texts(root.words)
     items += [build(k) for k in root.kids]
     edges = [Edge(a.shape, b.shape, label, kind) for a, b, kind, _, label in connectors
              if a.shape is not None and b.shape is not None]
@@ -577,6 +753,7 @@ def to_board(root: Node, W: int, H: int, connectors) -> Board:
 
 @dataclass
 class Result:
+    timings: dict
     board: Board
     words: list[Word]
     shapes: list[Node]
@@ -585,23 +762,66 @@ class Result:
 
 
 def convert(img: np.ndarray) -> Result:
+    import time
+    t0 = time.perf_counter()
+    timings: dict[str, float] = {}
+
+    def lap(name):
+        nonlocal t0
+        t = time.perf_counter()
+        timings[name] = round((t - t0) * 1000)
+        t0 = t
+
     H, W = img.shape[:2]
-    words = clean_words(ocr(img))
-    clean = erase_text(img, words)
+    raw = ocr(img)
+    lap("ocr")
+    glyphs = all_words(raw)
+    # icons misread as a glyph or two, whatever OCR's confidence
+    labels_ok = [w for w in glyphs if w.score >= 0.6]
+    _, guessed = misread_icons(glyphs, [])
+    guessed_ids = {(g.x, g.y) for g in guessed}
+    words = clean_words([Word(**w.__dict__) for w in raw if (w.x, w.y) not in guessed_ids])
+    clean = erase_text(img, glyphs)
+    lap("erase_text")
     edges = edge_map(clean)
+    lap("edges")
     shapes = find_shapes(edges)
+    lap("shapes")
     regions = find_regions(edges, shapes)
+    lap("regions")
 
     bg_bgr = np.median(clean.reshape(-1, 3), axis=0)
     bg = bg_bgr[::-1].astype(float)
     for s in shapes:
-        s.fill = shape_fill(clean, s, bg)
+        if is_photo(img, s):
+            s.kind = "image"
+        else:
+            s.fill = shape_fill(clean, s, bg)
+    # contours found inside a photo are part of the picture
+    images = [s for s in shapes if s.kind == "image"]
+    shapes = [s for s in shapes if not any(i is not s and i.contains(s, 0) for i in images)]
 
+    # a glyph that is the only content of a small shape is its label, not an icon
+    guessed = [g for g in guessed if not any(sh.contains(g, 2) and sh.w < 4 * g.w + 40 for sh in shapes)]
+    words += [Word(w.text, w.x, w.y, w.w, w.h, w.score) for w in labels_ok
+              if (w.x, w.y) in guessed_ids and not any(g.x == w.x and g.y == w.y for g in guessed)]
+    lap("classify")
     conns = find_connectors(img, clean, shapes, words)
+    lap("connectors")
     for a, b, *_ in conns:
         a.connected = b.connected = True
+    med_h = float(np.median([w.h for w in words])) if words else 20.0
+    # small textless circles/squares (avatars, emoji, buttons) are icons themselves
+    for sh in shapes:
+        small = max(sh.w, sh.h) <= 3 * med_h
+        if small and not sh.connected and sh.kind in ("ellipse", "rect") and not any(
+                sh.contains(w, 0) for w in words):
+            sh.kind, sh.fill = "icon", None
+    icons = guessed + find_icons(clean, glyphs, shapes, conns, med_h)
+    icons = [i for i in icons if not any(sh.kind == "icon" and sh.contains(i, 2) for sh in shapes)]
 
-    root = build_tree(W, H, shapes + regions, words)
+    lap("icons")
+    root = build_tree(W, H, shapes + regions + icons, words)
 
     # Free text sitting on a connector becomes its label.
     labelled = []
@@ -622,7 +842,8 @@ def convert(img: np.ndarray) -> Result:
 
     prune(root)
     board = to_board(root, W, H, labelled)
-    return Result(board, words, shapes, regions, labelled)
+    lap("tree+board")
+    return Result(timings, board, words, shapes + icons, regions, labelled)
 
 
 def debug_overlay(img: np.ndarray, res: Result) -> np.ndarray:
@@ -630,7 +851,8 @@ def debug_overlay(img: np.ndarray, res: Result) -> np.ndarray:
     for r in res.regions:
         cv2.rectangle(out, (r.x, r.y), (r.x2, r.y2), (200, 120, 0), 2)
     for s in res.shapes:
-        color = {"rect": (0, 140, 0), "ellipse": (0, 0, 220), "diamond": (180, 0, 180)}[s.kind]
+        color = {"rect": (0, 140, 0), "ellipse": (0, 0, 220), "diamond": (180, 0, 180),
+                 "image": (0, 200, 255), "icon": (255, 0, 0)}[s.kind]
         cv2.rectangle(out, (s.x, s.y), (s.x2, s.y2), color, 2)
     for w in res.words:
         cv2.rectangle(out, (w.x, w.y), (w.x2, w.y2), (0, 165, 255), 1)
@@ -645,14 +867,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("images", nargs="+", type=Path)
     ap.add_argument("--debug", action="store_true", help="also write a debug overlay to pipeline/out/")
+    ap.add_argument("--width", type=int, default=1000, help="normalise board width (0 = keep pixels)")
     args = ap.parse_args()
     for path in args.images:
         img = cv2.imread(str(path))
         res = convert(img)
         out = path.with_suffix(".pred.board")
-        out.write_text(serialize(res.board))
+        board = scale_board(res.board, args.width) if args.width else res.board
+        out.write_text(serialize(board))
         print(f"{path} -> {out.name}: {len(res.words)} text, {len(res.shapes)} shapes, "
-              f"{len(res.regions)} regions, {len(res.connectors)} connectors")
+              f"{len(res.regions)} regions, {len(res.connectors)} connectors | "
+              f"{sum(res.timings.values())}ms {res.timings}")
         if args.debug:
             dbg = ROOT / "out" / f"{path.parent.name}-{path.stem}.debug.png"
             dbg.parent.mkdir(exist_ok=True)

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import cv2
 
-from .board import Board, Shape, Text
+from .board import Board, Shape, Table, Text
 from .convert import convert
 from .synth import SCENES, draw_board
 
@@ -30,6 +30,8 @@ def strings(b: Board) -> Counter:
     for n in walk(b.items):
         if isinstance(n, Text):
             c.update(n.text.split("\n"))
+        elif isinstance(n, Table):
+            c.update(v for row in n.rows for v in row if v)
         elif n.label:
             c.update(n.label.split("\n"))
     c.update(e.label for e in b.edges if e.label)
@@ -60,7 +62,8 @@ def score(truth: Board, pred: Board, verbose=False):
     match = {}
     for t in tsh:
         best = max(psh, key=lambda p: iou(t, p), default=None)
-        if best is not None and iou(t, best) > 0.7 and best.kind == t.kind:
+        need = 0.4 if max(t.w, t.h) < 40 else 0.7  # icons: a few px off is a big IoU hit
+        if best is not None and iou(t, best) > need and best.kind == t.kind:
             match[id(t)] = best
     shape = (len(match) / max(len(tsh), 1), len(match) / max(len(psh), 1))
 
@@ -84,6 +87,14 @@ def score(truth: Board, pred: Board, verbose=False):
         if missed: print("    missing shapes:", missed)
         if truth.edges:
             print(f"    edges: truth {len(truth.edges)}, pred {len(pred.edges)}, matched {edge_hit}")
+    tables = (sum(isinstance(n, Table) for n in walk(truth.items)),
+              sum(isinstance(n, Table) for n in walk(pred.items)))
+    if verbose and tables[0] != tables[1]:
+        print(f"    tables: truth {tables[0]}, pred {tables[1]}")
+    extra = [f"{n.kind}@{round(n.x)},{round(n.y)}" for n in psh
+             if not any(m is n for m in match.values())]
+    if verbose and extra:
+        print("    extra shapes:", extra[:12])
     return text, shape, edge
 
 

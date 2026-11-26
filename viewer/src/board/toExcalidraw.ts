@@ -45,6 +45,12 @@ function autoSize(n: BoardNode): { w: number; h: number } {
     if (n.geom?.w && n.geom?.h) return { w: n.geom.w, h: n.geom.h };
     return measureText(n.text, LABEL_SIZE);
   }
+  if (n.type === "table") {
+    if (n.geom?.w && n.geom?.h) return { w: n.geom.w, h: n.geom.h };
+    const size = Number(n.style.size) || 16;
+    const widths = n.rows[0]?.map((_, c) => Math.max(...n.rows.map((r) => measureText(r[c] ?? "", size).w))) ?? [];
+    return { w: widths.reduce((a, b) => a + b + 24, 0), h: n.rows.length * size * 2 };
+  }
   const kids = n.children.map(autoSize);
   if (n.geom?.w && n.geom?.h) return { w: n.geom.w, h: n.geom.h };
   if (kids.length) {
@@ -123,15 +129,35 @@ export function toSkeletons(board: Board, opts: RenderOptions): ConvertResult {
   });
   const fontFamily = opts.sketchy ? 5 : 6; // Excalifont : Nunito
 
+  const fitFont = (text: string, maxW: number, byHeight: number) => {
+    const longest = Math.max(...text.split("\n").map((l) => l.length), 1);
+    const byWidth = maxW > 0 ? maxW / (longest * (opts.sketchy ? 0.5 : 0.48)) : Infinity;
+    return Math.max(8, Math.min(120, byHeight, byWidth));
+  };
+
   const visit = (n: BoardNode) => {
     const b = boxes.get(n)!;
+    if (n.type === "table") {
+      const size = Number(n.style.size) || 16;
+      const pitch = n.rows.length > 1 ? (b.h - size * LINE_HEIGHT) / (n.rows.length - 1) : 0;
+      const cols = n.cols.length ? n.cols : n.rows[0]?.map((_, c) => b.x + (c * b.w) / n.rows[0].length) ?? [];
+      n.rows.forEach((row, r) => {
+        row.forEach((cell, c) => {
+          if (!cell) return;
+          const right = c + 1 < cols.length ? cols[c + 1] - 8 : b.x + b.w;
+          skeletons.push({
+            type: "text", x: cols[c] ?? b.x, y: b.y + r * pitch, text: cell,
+            fontSize: fitFont(cell, right - (cols[c] ?? b.x), size), fontFamily,
+            strokeColor: "#1e1e1e",
+          });
+        });
+      });
+      return;
+    }
     if (n.type === "text") {
       const lines = n.text.split("\n");
-      const byHeight = b.h / (lines.length * LINE_HEIGHT);
       // Excalidraw's fonts are wider than most screen fonts: also fit the width.
-      const longest = Math.max(...lines.map((l) => l.length), 1);
-      const byWidth = n.geom?.w ? n.geom.w / (longest * (opts.sketchy ? 0.5 : 0.48)) : Infinity;
-      const fontSize = Math.max(8, Math.min(120, byHeight, byWidth));
+      const fontSize = fitFont(n.text, n.geom?.w ?? 0, b.h / (lines.length * LINE_HEIGHT));
       skeletons.push({
         type: "text", x: b.x, y: b.y, text: n.text, fontSize, fontFamily,
         strokeColor: color(STROKE, n.style.color) ?? "#1e1e1e",
@@ -147,6 +173,26 @@ export function toSkeletons(board: Board, opts: RenderOptions): ConvertResult {
     elemId.set(n, id);
     const fill = color(FILL, n.style.fill);
     const isContainer = n.children.length > 0;
+    if (n.kind === "icon" || n.kind === "image") {
+      // placeholders: a soft rounded square for icons, a crossed box for images
+      const icon = n.kind === "icon";
+      skeletons.push({
+        type: "rectangle", id, x: b.x, y: b.y, width: b.w, height: b.h,
+        roughness: opts.sketchy ? 1 : 0, strokeColor: "#868e96", strokeWidth: 1,
+        backgroundColor: icon ? "#e9ecef" : "#f1f3f5", fillStyle: icon ? "solid" : "hachure",
+        roundness: icon ? { type: 3 } : null,
+      });
+      if (!icon) {
+        for (const [x0, y0, x1, y1] of [[b.x, b.y, b.x + b.w, b.y + b.h], [b.x + b.w, b.y, b.x, b.y + b.h]]) {
+          skeletons.push({
+            type: "line", x: x0, y: y0, points: [[0, 0], [x1 - x0, y1 - y0]],
+            strokeColor: "#ced4da", strokeWidth: 1, roughness: opts.sketchy ? 1 : 0,
+          });
+        }
+      }
+      n.children.forEach(visit);
+      return;
+    }
     skeletons.push({
       type: n.kind === "rect" ? "rectangle" : n.kind,
       id, x: b.x, y: b.y, width: b.w, height: b.h,
@@ -155,7 +201,10 @@ export function toSkeletons(board: Board, opts: RenderOptions): ConvertResult {
       fillStyle: "solid",
       label: n.label
         ? {
-            text: n.label, fontSize: LABEL_SIZE, fontFamily,
+            text: n.label, fontFamily,
+            fontSize: isContainer
+              ? LABEL_SIZE
+              : fitFont(n.label, b.w - 16, Math.min(LABEL_SIZE, (b.h * 0.7) / (n.label.split("\n").length * LINE_HEIGHT))),
             textAlign: isContainer ? "left" : "center",
             verticalAlign: isContainer ? "top" : "middle",
           }

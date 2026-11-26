@@ -15,7 +15,9 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .board import Board, Edge, Shape, Text, serialize
+import numpy as np
+
+from .board import Board, Edge, Shape, Table, Text, scale_board, serialize
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
@@ -102,17 +104,31 @@ def scene_architecture() -> Board:
     ])
 
 
+def icon(glyph, x, y, size=20) -> Shape:
+    return Shape("icon", x, y, size, size, style={"_glyph": glyph})
+
+
+def image(x, y, w, h, seed=0) -> Shape:
+    return Shape("image", x, y, w, h, style={"_seed": seed})
+
+
+def table(x, y, cols, rows, size=16, pitch=50) -> Table:
+    f = font(size)
+    w = max(cols[c] + f.getlength(v) for row in rows for c, v in enumerate(row)) - x
+    h = (len(rows) - 1) * pitch + size * LINE_HEIGHT
+    return Table(x, y, math.ceil(w), round(h), list(cols), [list(r) for r in rows], {"size": size})
+
+
 def scene_dashboard() -> Board:
     topbar = rect(None, 0, 0, 1280, 64, [
         text("Acme Analytics", 24, 18, 22, bold=True),
-        text("Settings", 1060, 22, 18),
-        text("Log out", 1170, 22, 18),
+        text("Settings", 1000, 22, 18),
+        text("Log out", 1110, 22, 18),
+        image(1214, 10, 44, 44, seed=1),
     ], fill="gray", stroke="gray")
+    nav = [("Overview", "home", 96), ("Reports", "chart", 140), ("Customers", "users", 184), ("Billing", "card", 228)]
     sidebar = rect(None, 0, 64, 220, 736, [
-        text("Overview", 24, 96, 18, bold=True),
-        text("Reports", 24, 140, 18),
-        text("Customers", 24, 184, 18),
-        text("Billing", 24, 228, 18),
+        *[c for label, g, y in nav for c in (icon(g, 24, y + 1), text(label, 56, y, 18, bold=(label == "Overview")))],
         text("Help", 24, 740, 18),
     ], stroke="gray")
     cards = []
@@ -121,7 +137,6 @@ def scene_dashboard() -> Board:
         cards.append(rect(None, x, 160, 300, 140, [
             text(title, x + 20, 180, 18), text(value, x + 20, 220, 36, bold=True),
         ], stroke="gray"))
-    cols = [280, 420, 680, 900]
     rows = [
         ("Order", "Customer", "Amount", "Status"),
         ("#1042", "Jane Cooper", "$120.00", "Shipped"),
@@ -129,12 +144,11 @@ def scene_dashboard() -> Board:
         ("#1040", "Esther Howard", "$240.00", "Shipped"),
         ("#1039", "Cameron Lee", "$15.99", "Refunded"),
     ]
-    cells = [text("Recent orders", 280, 360, 20, bold=True)]
-    for r, row in enumerate(rows):
-        for c, val in enumerate(row):
-            cells.append(text(val, cols[c], 420 + r * 50, 16, bold=(r == 0)))
-    table = rect(None, 260, 340, 960, 400, cells, stroke="gray")
-    return Board(1280, 800, [topbar, sidebar, text("Overview", 260, 96, 30, bold=True), *cards, table], [])
+    orders = rect(None, 260, 340, 960, 400, [
+        text("Recent orders", 280, 360, 20, bold=True),
+        table(280, 420, [280, 420, 680, 900], rows),
+    ], stroke="gray")
+    return Board(1280, 800, [topbar, sidebar, text("Overview", 260, 96, 30, bold=True), *cards, orders], [])
 
 
 def scene_kanban() -> Board:
@@ -235,7 +249,47 @@ def draw_board(board: Board, scale=2) -> Image.Image:
                 d.line(P(ax + ux * t, ay + uy * t, ax + ux * t2, ay + uy * t2), fill=color, width=width)
                 t = t2 + gap
 
+    def draw_icon(g, x, y, sz):
+        w = max(1, round(1.6 * S))
+        c = "#495057"
+        if g == "home":
+            d.line(P(x + 2, y + sz * .45, x + sz / 2, y + 2, x + sz - 2, y + sz * .45), fill=c, width=w)
+            d.rectangle(P(x + 5, y + sz * .45, x + sz - 5, y + sz - 2), outline=c, width=w)
+        elif g == "chart":
+            for i, hh in enumerate((.4, .75, .55)):
+                bx = x + 3 + i * 6
+                d.rectangle(P(bx, y + sz - 2 - (sz - 4) * hh, bx + 3, y + sz - 2), fill=c)
+        elif g == "users":
+            d.ellipse(P(x + 6, y + 2, x + 14, y + 10), outline=c, width=w)
+            d.arc(P(x + 2, y + 11, x + 18, y + 27), 180, 360, fill=c, width=w)
+        elif g == "card":
+            d.rectangle(P(x + 1, y + 4, x + sz - 1, y + sz - 4), outline=c, width=w)
+            d.line(P(x + 1, y + 8, x + sz - 1, y + 8), fill=c, width=w)
+
+    def draw_image(n):
+        rng = np.random.default_rng(int(n.style.get("_seed", 0)))
+        w, h = int(n.w * S), int(n.h * S)
+        yy, xx = np.mgrid[0:h, 0:w] / max(w, h)
+        base = np.stack([200 * xx + 40, 140 * yy + 60, 160 * (1 - xx) + 50], -1)
+        blobs = sum(rng.uniform(40, 90) * np.exp(-((xx - rng.uniform()) ** 2 + (yy - rng.uniform()) ** 2) / .05)
+                    for _ in range(4))
+        arr = np.clip(base + blobs[..., None] * rng.uniform(-1, 1, 3) + rng.normal(0, 8, (h, w, 3)), 0, 255)
+        img.paste(Image.fromarray(arr.astype(np.uint8)), (int(n.x * S), int(n.y * S)))
+
     def draw(node):
+        if isinstance(node, Table):
+            size = float(node.style.get("size", 16))
+            pitch = (node.h - size * LINE_HEIGHT) / max(len(node.rows) - 1, 1)
+            for i, row in enumerate(node.rows):
+                for c, val in enumerate(row):
+                    draw_text_block(val, node.cols[c], node.y + i * pitch, size, i == 0)
+            return
+        if isinstance(node, Shape) and node.kind == "icon":
+            draw_icon(node.style.get("_glyph"), node.x, node.y, node.w)
+            return
+        if isinstance(node, Shape) and node.kind == "image":
+            draw_image(node)
+            return
         if isinstance(node, Text):
             size = node.h / (len(node.text.split("\n")) * LINE_HEIGHT)
             draw_text_block(node.text, node.x, node.y, size, bool(node.style.get("bold")))
@@ -295,7 +349,7 @@ def main():
     for name, build in SCENES.items():
         board = build()
         draw_board(board).save(out / f"{name}.png")
-        (out / f"{name}.board").write_text(serialize(board))
+        (out / f"{name}.board").write_text(serialize(scale_board(board, 1000)))
         print(f"wrote {name}")
 
 

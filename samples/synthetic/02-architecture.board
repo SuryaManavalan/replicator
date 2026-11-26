@@ -1,15 +1,15 @@
-board 1280x800
+board 1000x625
 
-"System Architecture" @40,30 370x40 [bold]
-rect "Backend" @310,120 580x560 [dashed]
-  rect "API Gateway" @350,190 190x80 [fill=violet]
-  rect "Auth Service" @660,190 190x80
-  rect "Orders Service" @350,420 190x80
-  rect "Billing Service" @660,420 190x80
-ellipse "Redis" @990,175 200x110 [fill=red]
-rect "Web App" @60,330 180x90 [fill=blue]
-ellipse "Postgres" @990,405 200x110 [fill=green]
-"TODO: add rate limiting" @40,720 214x22
+"System Architecture" @31,23 289x31 [bold]
+rect "Web App" @47,258 141x70 [fill=blue]
+rect "Backend" @242,94 453x438 [dashed]
+  rect "API Gateway" @273,148 148x62 [fill=violet]
+  rect "Auth Service" @516,148 148x62
+  rect "Orders Service" @273,328 148x62
+  rect "Billing Service" @516,328 148x62
+ellipse "Redis" @773,137 156x86 [fill=red]
+ellipse "Postgres" @773,316 156x86 [fill=green]
+"TODO: add rate limiting" @31,562 167x17
 
 "Web App" -> "API Gateway" : "HTTPS"
 "API Gateway" -> "Auth Service" : "verify JWT"

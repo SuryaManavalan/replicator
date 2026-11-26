@@ -1,6 +1,6 @@
 // Parser for the v0 board syntax (see syntax/SPEC.md).
 
-export type ShapeKind = "rect" | "ellipse" | "diamond";
+export type ShapeKind = "rect" | "ellipse" | "diamond" | "image" | "icon";
 export type EdgeKind = "->" | "<-" | "<->" | "--";
 export type Style = Record<string, string | true>;
 export interface Geom { x: number; y: number; w?: number; h?: number }
@@ -24,7 +24,17 @@ export interface TextNode {
   line: number;
 }
 
-export type BoardNode = ShapeNode | TextNode;
+/** Text aligned in rows and columns; cols are absolute column x positions. */
+export interface TableNode {
+  type: "table";
+  geom?: Geom;
+  cols: number[];
+  rows: string[][];
+  style: Style;
+  line: number;
+}
+
+export type BoardNode = ShapeNode | TextNode | TableNode;
 export type Ref = { id: string } | { label: string };
 
 export interface EdgeNode {
@@ -46,7 +56,7 @@ export interface Board {
   errors: ParseError[];
 }
 
-const SHAPES = new Set(["rect", "ellipse", "diamond"]);
+const SHAPES = new Set(["rect", "ellipse", "diamond", "image", "icon"]);
 
 type Tok =
   | { t: "str"; v: string }
@@ -55,6 +65,8 @@ type Tok =
   | { t: "style"; v: Style }
   | { t: "arrow"; v: EdgeKind }
   | { t: "colon" }
+  | { t: "pipe" }
+  | { t: "nums"; v: number[] }
   | { t: "word"; v: string };
 
 const TOKEN = new RegExp(
@@ -62,6 +74,8 @@ const TOKEN = new RegExp(
     String.raw`"(?:[^"\\]|\\.)*"`, // string
     String.raw`@-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?`, // @x,y
     String.raw`\d+(?:\.\d+)?x\d+(?:\.\d+)?`, // WxH
+    String.raw`-?\d+(?:\.\d+)?(?:,-?\d+(?:\.\d+)?)*`, // 12,40,80 (number list)
+    String.raw`\|`,
     String.raw`\[[^\]]*\]`, // [style]
     String.raw`<->|->|<-|--`, // arrows
     String.raw`:`,
@@ -101,6 +115,8 @@ function tokenize(src: string): Tok[] | string {
     } else if (s.startsWith("[")) toks.push({ t: "style", v: parseStyle(s.slice(1, -1)) });
     else if (s === "->" || s === "<-" || s === "<->" || s === "--") toks.push({ t: "arrow", v: s });
     else if (s === ":") toks.push({ t: "colon" });
+    else if (s === "|") toks.push({ t: "pipe" });
+    else if (/^-?\d/.test(s)) toks.push({ t: "nums", v: s.split(",").map(Number) });
     else if (/^[A-Za-z_]/.test(s)) toks.push({ t: "word", v: s });
     else return `unexpected "${s}"`;
   }
@@ -131,8 +147,8 @@ function asRef(k: Tok | undefined): Ref | null {
 
 export function parse(src: string): Board {
   const board: Board = { items: [], edges: [], errors: [] };
-  // stack[d] = shape at depth d that children at depth d+1 attach to
-  const stack: (ShapeNode | TextNode)[] = [];
+  // stack[d] = node at depth d that children at depth d+1 attach to
+  const stack: BoardNode[] = [];
 
   src.split("\n").forEach((raw, idx) => {
     const line = idx + 1;
@@ -147,6 +163,21 @@ export function parse(src: string): Board {
     if (!toks.length) return;
 
     const first = toks[0];
+    stack.length = Math.min(stack.length, depth);
+    const parent = depth > 0 ? stack[depth - 1] : undefined;
+
+    // table row: "a" | "b" | "c"
+    if (parent?.type === "table") {
+      const cells: string[] = [];
+      let expectCell = true;
+      for (const k of toks) {
+        if (k.t === "str" && expectCell) { cells.push(k.v); expectCell = false; }
+        else if (k.t === "pipe") { if (expectCell) cells.push(""); expectCell = true; }
+        else return err('table rows look like: "a" | "b" | "c"');
+      }
+      parent.rows.push(cells);
+      return;
+    }
 
     // board WxH
     if (first.t === "word" && first.v === "board") {
@@ -175,7 +206,19 @@ export function parse(src: string): Board {
     }
 
     let node: BoardNode;
-    if (first.t === "word" && SHAPES.has(first.v)) {
+    if (first.t === "word" && first.v === "table") {
+      let cols: number[] = [];
+      const rest: Tok[] = [];
+      for (let i = 1; i < toks.length; i++) {
+        const k = toks[i];
+        if (k.t === "word" && k.v === "cols" && toks[i + 1]?.t === "nums") {
+          cols = (toks[++i] as { v: number[] }).v;
+        } else rest.push(k);
+      }
+      const { geom, style, rest: extra } = tail(rest, 0);
+      if (extra.length) err("unexpected tokens after table");
+      node = { type: "table", geom, cols, rows: [], style, line };
+    } else if (first.t === "word" && SHAPES.has(first.v)) {
       let i = 1;
       let id: string | undefined;
       let label: string | undefined;
@@ -195,13 +238,11 @@ export function parse(src: string): Board {
     }
 
     // attach by indentation
-    stack.length = Math.min(stack.length, depth);
-    const parent = depth > 0 ? stack[depth - 1] : undefined;
     if (depth > 0 && !parent) {
       err("indented, but nothing above it to sit inside");
       board.items.push(node);
     } else if (parent && parent.type !== "shape") {
-      err("text can't contain anything");
+      err(`${parent.type} can't contain shapes or text`);
       board.items.push(node);
     } else if (parent) {
       parent.children.push(node);

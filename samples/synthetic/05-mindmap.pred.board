@@ -1,18 +1,18 @@
-board 1280x800
+board 1000x625
 
-rect "Marketing" @123,123 195x65 [fill=blue]
-rect "Engineering" @963,123 195x65 [fill=blue]
-rect rect @43,243 145x45
-rect "Launch video" @223,243 145x45
-rect "API freeze" @903,243 145x45
-rect "Load test" @1078,238 154x54
-ellipse "Product Launch" @523,343 235x115 [fill=violet]
-rect "Pricing page" @38,478 154x54
-rect "Partner deck" @218,478 154x54
-rect "FAQ" @898,478 154x54
-rect "On-call rota" @1078,478 154x54
-rect "Sales" @123,603 195x65 [fill=blue]
-rect "Support" @963,603 195x65 [fill=blue]
+rect "Marketing" @96,96 152x51 [fill=blue]
+rect "Engineering" @752,96 152x51 [fill=blue]
+rect rect @34,190 113x35
+rect "Launch video" @174,190 113x35
+rect "API freeze" @705,190 113x35
+rect "Load test" @842,186 120x42
+ellipse "Product Launch" @409,268 184x90 [fill=violet]
+rect "Pricing page" @30,373 120x42
+rect "Partner deck" @170,373 120x42
+rect "FAQ" @702,373 120x42
+rect "On-call rota" @842,373 120x42
+rect "Sales" @96,471 152x51 [fill=blue]
+rect "Support" @752,471 152x51 [fill=blue]
 
 "Product Launch" -- "Support"
 "Product Launch" -- "Sales"
