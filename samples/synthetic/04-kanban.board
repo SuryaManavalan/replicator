@@ -1,0 +1,14 @@
+board 1280x800
+
+"Sprint 14" @40,30 167x40 [bold]
+rect "To Do" @40,100 380x660 [fill=gray]
+  rect "Write onboarding docs" @60,160 340x70 [fill=yellow]
+  rect "Fix login redirect" @60,250 340x70 [fill=yellow]
+  rect "Add CSV export" @60,340 340x70 [fill=yellow]
+rect "In Progress" @450,100 380x660 [fill=gray]
+  rect "Payment retries" @470,160 340x70 [fill=blue]
+  rect "Dark mode" @470,250 340x70 [fill=blue]
+rect "Done" @860,100 380x660 [fill=gray]
+  rect "Upgrade to Node 22" @880,160 340x70 [fill=green]
+  rect "Rate limiter" @880,250 340x70 [fill=green]
+  rect "Audit logging" @880,340 340x70 [fill=green]

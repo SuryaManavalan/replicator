@@ -1,0 +1,27 @@
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; height: 100%; }
+body { font-family: system-ui, sans-serif; background: #f8f9fa; color: #1e1e1e; }
+
+.app { display: flex; flex-direction: column; height: 100%; }
+header {
+  display: flex; align-items: center; gap: 16px; padding: 8px 16px;
+  border-bottom: 1px solid #dee2e6; background: #fff; font-size: 14px;
+}
+header .stats { margin-left: auto; color: #868e96; }
+
+main { flex: 1; display: grid; grid-template-columns: minmax(360px, 2fr) 3fr; min-height: 0; }
+.left { display: grid; grid-template-rows: auto 1fr; min-height: 0; border-right: 1px solid #dee2e6; }
+.source { padding: 12px; background: #fff; border-bottom: 1px solid #dee2e6; }
+.source img { display: block; width: 100%; height: auto; border: 1px solid #dee2e6; }
+.source .empty { color: #868e96; margin: 0; }
+.editor { display: flex; flex-direction: column; min-height: 0; }
+.editor textarea {
+  flex: 1; border: 0; padding: 12px; resize: none; outline: none;
+  font: 13px/1.5 ui-monospace, "Cascadia Code", Menlo, monospace; background: #fff;
+}
+.problems { margin: 0; padding: 8px 12px 8px 28px; background: #fff5f5; color: #c92a2a; font-size: 13px; max-height: 30%; overflow: auto; }
+.canvas { position: relative; min-height: 0; }
+
+@media (max-width: 800px) {
+  main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+}

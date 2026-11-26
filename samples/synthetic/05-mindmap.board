@@ -1,0 +1,28 @@
+board 1280x800
+
+rect "Marketing" @120,120 200x70 [fill=blue]
+rect "Engineering" @960,120 200x70 [fill=blue]
+rect "Blog post" @40,240 150x50
+rect "Launch video" @220,240 150x50
+rect "API freeze" @900,240 150x50
+rect "Load test" @1080,240 150x50
+ellipse "Product Launch" @520,340 240x120 [fill=violet]
+rect "Pricing page" @40,480 150x50
+rect "Partner deck" @220,480 150x50
+rect "FAQ" @900,480 150x50
+rect "On-call rota" @1080,480 150x50
+rect "Sales" @120,600 200x70 [fill=blue]
+rect "Support" @960,600 200x70 [fill=blue]
+
+"Product Launch" -- "Marketing"
+"Marketing" -- "Blog post"
+"Marketing" -- "Launch video"
+"Product Launch" -- "Engineering"
+"Engineering" -- "API freeze"
+"Engineering" -- "Load test"
+"Product Launch" -- "Sales"
+"Sales" -- "Pricing page"
+"Sales" -- "Partner deck"
+"Product Launch" -- "Support"
+"Support" -- "FAQ"
+"Support" -- "On-call rota"
