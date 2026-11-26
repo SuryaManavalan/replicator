@@ -169,8 +169,17 @@ export function toSkeletons(board: Board, opts: RenderOptions): ConvertResult {
       }
       skeletons.push({
         type: "text", x: b.x, y: b.y, text: n.text, fontSize, fontFamily,
-        strokeColor: color(STROKE, n.style.color) ?? "#1e1e1e",
+        // [?]: OCR wasn't sure — draw it greyed out
+        strokeColor: n.style["?"] ? "#adb5bd" : color(STROKE, n.style.color) ?? "#1e1e1e",
       });
+      if (typeof n.style.badge === "string") {
+        const d = Math.max(12, Math.min(b.h / lines.length, 24) * 0.8);
+        skeletons.push({
+          type: "ellipse", x: b.x - d - 10, y: b.y - d / 3, width: d, height: d,
+          roughness: 0, strokeColor: "#1971c2", backgroundColor: "#4dabf7", fillStyle: "solid",
+          label: { text: n.style.badge, fontSize: d * 0.6, fontFamily, strokeColor: "#ffffff" },
+        });
+      }
       return;
     }
     const id = n.id ?? `shape-${++counter}`;
@@ -268,6 +277,8 @@ export function toSkeletons(board: Board, opts: RenderOptions): ConvertResult {
       points: [[0, 0], [qx - px, qy - py]],
       width: Math.abs(qx - px), height: Math.abs(qy - py),
       ...common(e.style),
+      // [guess]: inferred from a label sitting between two shapes
+      ...(e.style.guess ? { strokeStyle: "dashed", strokeColor: "#adb5bd" } : {}),
       start: { id: elemId.get(a) },
       end: { id: elemId.get(z) },
       startArrowhead: e.kind === "<-" || e.kind === "<->" ? "arrow" : null,

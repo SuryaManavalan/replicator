@@ -74,8 +74,18 @@ def score(truth: Board, pred: Board, verbose=False):
         return (id(a), id(b), e.kind) if e.kind != "--" else (frozenset((id(a), id(b))), "--")
 
     tkeys = Counter(k for e in truth.edges if (k := key(e, match)) is not None)
-    pkeys = Counter(key(e, None) for e in pred.edges)
+    pkeys = Counter(key(e, None) for e in pred.edges if not e.style.get("guess"))
     edge_hit = sum((tkeys & pkeys).values())
+    # a [guess] edge (label over a hidden arrow) has no direction: match either way
+    left = tkeys - pkeys
+    for e in pred.edges:
+        if e.style.get("guess"):
+            pair = {id(e.src), id(e.dst)}
+            for k in list(left):
+                if left[k] and (set(k[:2]) == pair if k[-1] != "--" else set(k[0]) == pair):
+                    left[k] -= 1
+                    edge_hit += 1
+                    break
     edge = (edge_hit / max(len(truth.edges), 1), edge_hit / max(len(pred.edges), 1))
 
     if verbose:

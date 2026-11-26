@@ -69,7 +69,8 @@ type Tok =
   | { t: "colon" }
   | { t: "pipe" }
   | { t: "nums"; v: number[] }
-  | { t: "word"; v: string };
+  | { t: "word"; v: string }
+  | { t: "id"; v: string };
 
 const TOKEN = new RegExp(
   [
@@ -81,8 +82,9 @@ const TOKEN = new RegExp(
     String.raw`\[[^\]]*\]`, // [style]
     String.raw`<->|->|<-|--`, // arrows
     String.raw`:`,
+    String.raw`#[A-Za-z_][\w-]*`, // #id
     String.raw`[A-Za-z_][\w-]*`, // word
-    String.raw`#.*$`, // comment
+    String.raw`#.*$`, // comment ("# ..." or a bare "#")
     String.raw`\S+`, // anything else -> error
   ].join("|"),
   "g",
@@ -106,6 +108,7 @@ function tokenize(src: string): Tok[] | string {
   const toks: Tok[] = [];
   for (const m of src.matchAll(TOKEN)) {
     const s = m[0];
+    if (/^#[A-Za-z_]/.test(s)) { toks.push({ t: "id", v: s.slice(1) }); continue; }
     if (s.startsWith("#")) break;
     if (s.startsWith('"')) toks.push({ t: "str", v: unquote(s) });
     else if (s.startsWith("@")) {
@@ -143,7 +146,7 @@ function tail(toks: Tok[], i: number): { geom?: Geom; style: Style; rest: Tok[] 
 function asRef(k: Tok | undefined): Ref | null {
   if (!k) return null;
   if (k.t === "str") return { label: k.v };
-  if (k.t === "word") return { id: k.v };
+  if (k.t === "word" || k.t === "id") return { id: k.v };
   return null;
 }
 
@@ -156,7 +159,7 @@ export function parse(src: string): Board {
     const line = idx + 1;
     const err = (message: string) => board.errors.push({ line, message });
     const body = raw.trimStart();
-    if (!body || body.startsWith("#")) return;
+    if (!body || /^#(\s|$)/.test(body)) return;
     const indent = raw.length - body.length;
     const depth = Math.floor(indent / 2);
 
@@ -227,7 +230,7 @@ export function parse(src: string): Board {
       let count: number | undefined;
       if (first.v === "icons" && toks[i]?.t === "nums") count = (toks[i++] as { v: number[] }).v[0];
       const k1 = toks[i];
-      if (k1?.t === "word") { id = k1.v; i++; }
+      if (k1?.t === "id" || k1?.t === "word") { id = k1.v; i++; }
       const k2 = toks[i];
       if (k2?.t === "str") { label = k2.v; i++; }
       const { geom, style, rest } = tail(toks, i);

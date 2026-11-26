@@ -181,18 +181,30 @@ def _slug(label: str) -> str:
     return slug if slug[0].isalpha() else f"n{slug}"
 
 
-def serialize(board: Board) -> str:
+def serialize(board: Board, geometry: str = "full") -> str:
+    """geometry: "full" (every element), "boxes" (shapes/tables/groups only,
+    not text or icons: lighter for an LLM, still renderable approximately),
+    or "none" (structure and text only)."""
     shapes = [n for n in _walk(board.items) if isinstance(n, Shape)]
     label_counts = Counter(s.label for s in shapes if s.label)
     referenced = {id(e.src) for e in board.edges} | {id(e.dst) for e in board.edges}
 
-    # Assign ids only where the label can't serve as identifier, derived from
-    # the label when possible so they stay readable ("n3", "api-gateway-2").
+    # Edges refer to shapes by label when every endpoint has a unique label.
+    # Otherwise every endpoint gets an #id (consistent: never a mix), derived
+    # from the label when there is one ("#n3", "#api-gateway").
+    endpoints = [s for s in shapes if id(s) in referenced]
+    use_ids = any(s.id or not s.label or label_counts[s.label] > 1 for s in endpoints)
     used = {s.id for s in shapes if s.id}
+    counters: Counter = Counter()
     for s in shapes:
-        needs = id(s) in referenced and (not s.label or label_counts[s.label] > 1)
-        if needs and not s.id:
-            base = _slug(s.label) if s.label else s.kind
+        if s.id:
+            continue
+        if use_ids and id(s) in referenced:
+            if s.label:
+                base = _slug(s.label)
+            else:
+                counters[s.kind] += 1
+                base = f"{s.kind}{counters[s.kind]}"
             cand, k = base, 1
             while cand in used:
                 k += 1
@@ -201,18 +213,25 @@ def serialize(board: Board) -> str:
             used.add(cand)
 
     def ref(s: Shape) -> str:
-        return s.id if s.id else quote(s.label)  # type: ignore[arg-type]
+        return f"#{s.id}" if s.id else quote(s.label)  # type: ignore[arg-type]
 
     lines = [f"board {board.w}x{board.h}", ""]
+
+    def g(node) -> str:
+        if geometry == "none":
+            return ""
+        if geometry == "boxes" and (isinstance(node, Text) or getattr(node, "kind", "") in ("icon", "icons")):
+            return ""
+        return " " + _geom(node)
 
     def emit(items, depth):
         for node in reading_order(items):
             pad = "  " * depth
             if isinstance(node, Text):
-                lines.append(f"{pad}{quote(node.text)} {_geom(node)}{_style(node.style)}")
+                lines.append(f"{pad}{quote(node.text)}{g(node)}{_style(node.style)}")
             elif isinstance(node, Table):
                 cols = ",".join(str(round(c)) for c in node.cols)
-                lines.append(f"{pad}table {_geom(node)} cols {cols}{_style(node.style)}")
+                lines.append(f"{pad}table{g(node)} cols {cols}{_style(node.style)}")
                 for row in node.rows:
                     lines.append(f"{pad}  " + " | ".join(quote(c) for c in row))
             else:
@@ -220,10 +239,10 @@ def serialize(board: Board) -> str:
                 if node.kind == "icons":
                     head += f" {node.style.get('_n', 0)}"
                 if node.id:
-                    head += f" {node.id}"
+                    head += f" #{node.id}"
                 if node.label:
                     head += f" {quote(node.label)}"
-                lines.append(f"{pad}{head} {_geom(node)}{_style(node.style)}")
+                lines.append(f"{pad}{head}{g(node)}{_style(node.style)}")
                 emit(node.children, depth + 1)
 
     emit(board.items, 0)

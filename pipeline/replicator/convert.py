@@ -809,8 +809,33 @@ def find_connectors(img: np.ndarray, clean: np.ndarray, shapes: list[Node], word
                 return True
         return False
 
+    def isolated(s: Seg) -> bool:
+        """Connectors run through empty space; strokes of unread text (other
+        scripts, logos) have ink right beside them."""
+        L = s.length or 1
+        nx, ny = -(s.y1 - s.y0) / L, (s.x1 - s.x0) / L
+        ts = np.linspace(0.15, 0.85, 15)
+        busy = 0
+        for t in ts:
+            px, py = s.x0 + t * (s.x1 - s.x0), s.y0 + t * (s.y1 - s.y0)
+            for off in (-9, -6, 6, 9):
+                qx, qy = int(px + off * nx), int(py + off * ny)
+                if 0 <= qx < W and 0 <= qy < H and raw_ink[qy, qx]:
+                    busy += 1
+                    break
+        return busy / len(ts) < 0.3
+
+    def inked(s: Seg) -> bool:
+        """Most of the merged line (outside text boxes) must actually be drawn."""
+        n = max(int(s.length / 2), 4)
+        ts = np.linspace(0, 1, n)
+        xs = (s.x0 + ts * (s.x1 - s.x0)).astype(int).clip(0, W - 1)
+        ys = (s.y0 + ts * (s.y1 - s.y0)).astype(int).clip(0, H - 1)
+        vis = ~text_mask[ys, xs]
+        return vis.sum() >= 4 and (line_ink[ys, xs][vis] > 0).mean() >= 0.75
+
     for s in segs:
-        if s.length < 20 or along_direct(s):
+        if s.length < 20 or along_direct(s) or not isolated(s) or not inked(s):
             continue
         a, b = attach(s.x0, s.y0), attach(s.x1, s.y1)
         if a and b and a is not b and not a.contains(b) and not b.contains(a):
@@ -820,6 +845,51 @@ def find_connectors(img: np.ndarray, clean: np.ndarray, shapes: list[Node], word
         for a, b, kind, s, src in found.values():
             print("conn", src, (a.x, a.y), (b.x, b.y), [round(v) for v in (s.x0, s.y0, s.x1, s.y1)])
     return [(a, b, kind, s) for a, b, kind, s, _ in found.values()]
+
+
+def guess_label_edges(root: Node, regions: list[Node], shapes: list[Node], conns: list) -> list:
+    """Text sitting in the gap between two boxes, covering most of it, is almost
+    always a label on an arrow we couldn't see (hidden under the label). Emit
+    it as an edge flagged [guess] instead of leaving it as loose text."""
+    leaves = [s for s in shapes if s.kind in ("rect", "ellipse", "diamond")
+              and not any(o is not s and s.contains(o, 0) for o in shapes)]
+    linked = {frozenset((id(a), id(b))) for a, b, *_ in conns}
+    owners = [root] + regions + [s for s in shapes if not any(s is l for l in leaves)]
+    out = []
+    for owner in owners:
+        for w in list(owner.words):
+            near = [s for s in leaves if _dist_to_node(w.cx, w.cy, s) < 4 * w.h]
+            best = None
+            for i, a in enumerate(near):
+                for b in near[i + 1:]:
+                    if frozenset((id(a), id(b))) in linked:
+                        continue
+                    dx = (b.x + b.w / 2) - (a.x + a.w / 2)
+                    dy = (b.y + b.h / 2) - (a.y + a.h / 2)
+                    if not dx and not dy:
+                        continue
+                    p = _border_point(a, dx, dy)
+                    q = _border_point(b, -dx, -dy)
+                    seg = Seg(*p, *q)
+                    L = seg.length
+                    if L < 4 or (q[0] - p[0]) * dx + (q[1] - p[1]) * dy < 0:
+                        continue
+                    d, t = _point_seg_dist(w.cx, w.cy, seg)
+                    if d > 0.6 * w.h or not 0 < t < 1:
+                        continue
+                    ux, uy = (q[0] - p[0]) / L, (q[1] - p[1]) / L
+                    span = abs(w.w * ux) + abs(w.h * uy)  # word's extent along the gap
+                    if span < 0.5 * L or L > 8 * w.h:
+                        continue
+                    if best is None or d < best[0]:
+                        best = (d, a, b, seg)
+            if best:
+                _, a, b, seg = best
+                owner.words.remove(w)
+                linked.add(frozenset((id(a), id(b))))
+                a.connected = b.connected = True
+                out.append((a, b, "--", seg, w.text, {"guess": True}))
+    return out
 
 
 # ---------------------------------------------------------------- tree + text
@@ -878,7 +948,12 @@ def merge_lines(words: list[Word]) -> list[Word]:
 
 
 def _text(w: Word) -> Text:
-    return Text(w.text, w.x, w.y, w.w, w.h, {"bold": True} if w.bold else {})
+    style: dict = {}
+    if w.bold:
+        style["bold"] = True
+    if w.score < 0.85:
+        style["?"] = True  # OCR wasn't sure
+    return Text(w.text, w.x, w.y, w.w, w.h, style)
 
 
 def _bbox(items):
@@ -903,6 +978,22 @@ def tidy(items: list) -> list:
                 used.add(id(ic))
                 break
     rest = [n for n in items if id(n) not in used]
+
+    # a small number just left of a label is a badge on it (unread counts)
+    texts = [n for n in rest if isinstance(n, Text)]
+    for b in texts:
+        if not (b.text.isdigit() and len(b.text) <= 3):
+            continue
+        for t in texts:
+            if t is b or t.text.isdigit():
+                continue
+            line_h = t.h / (t.text.count("\n") + 1)
+            gap = t.x - (b.x + b.w)
+            if b.h <= 0.9 * line_h and -2 <= gap <= 2 * line_h and abs((b.y + b.h / 2) - (t.y + line_h / 2)) < line_h:
+                t.style["badge"] = b.text
+                used.add(id(b))
+                break
+    rest = [n for n in rest if id(n) not in used]
 
     # runs of icons along a row
     icons = sorted((n for n in rest if isinstance(n, Shape) and n.kind == "icon" and not n.children),
@@ -1005,7 +1096,8 @@ def to_board(root: Node, W: int, H: int, connectors) -> Board:
     items = texts(root.words)
     items += [build(k) for k in root.kids]
     items = group_columns(tidy(items), min_gap=max(8.0, 0.008 * W))
-    edges = [Edge(a.shape, b.shape, label, kind) for a, b, kind, _, label in connectors
+    edges = [Edge(a.shape, b.shape, c[4], c[2], dict(c[5]) if len(c) > 5 else {})
+             for c in connectors for a, b in [(c[0], c[1])]
              if a.shape is not None and b.shape is not None]
     return Board(W, H, items, edges)
 
@@ -1115,6 +1207,7 @@ def convert(img: np.ndarray) -> Result:
             label = w.text
         labelled.append((a, b, kind, s, label))
 
+    labelled += guess_label_edges(root, regions, shapes, labelled)
     prune(root)
     board = to_board(root, W, H, labelled)
     lap("tree+board")
@@ -1131,7 +1224,7 @@ def debug_overlay(img: np.ndarray, res: Result) -> np.ndarray:
         cv2.rectangle(out, (s.x, s.y), (s.x2, s.y2), color, 2)
     for w in res.words:
         cv2.rectangle(out, (w.x, w.y), (w.x2, w.y2), (0, 165, 255), 1)
-    for a, b, kind, s, label in res.connectors:
+    for a, b, kind, s, label, *_ in res.connectors:
         cv2.line(out, (int(s.x0), int(s.y0)), (int(s.x1), int(s.y1)), (255, 0, 255), 3)
         if kind != "--":
             cv2.circle(out, (int(s.x1), int(s.y1)), 7, (255, 0, 255), -1)
@@ -1143,13 +1236,15 @@ def main():
     ap.add_argument("images", nargs="+", type=Path)
     ap.add_argument("--debug", action="store_true", help="also write a debug overlay to pipeline/out/")
     ap.add_argument("--width", type=int, default=1000, help="normalise board width (0 = keep pixels)")
+    ap.add_argument("--geometry", choices=["full", "boxes", "none"], default="full",
+                    help="how much geometry to write (full is needed for faithful rendering)")
     args = ap.parse_args()
     for path in args.images:
         img = cv2.imread(str(path))
         res = convert(img)
         out = path.with_suffix(".pred.board")
         board = scale_board(res.board, args.width) if args.width else res.board
-        out.write_text(serialize(board))
+        out.write_text(serialize(board, args.geometry))
         print(f"{path} -> {out.name}: {len(res.words)} text, {len(res.shapes)} shapes, "
               f"{len(res.regions)} regions, {len(res.connectors)} connectors | "
               f"{sum(res.timings.values())}ms {res.timings}")

@@ -1,28 +1,28 @@
 board 1000x625
 
-rect "Marketing" @96,96 152x51 [fill=blue]
-rect "Engineering" @752,96 152x51 [fill=blue]
-rect rect @34,190 113x35
-rect "Launch video" @174,190 113x35
-rect "API freeze" @705,190 113x35
-rect "Load test" @842,186 120x42
-ellipse "Product Launch" @409,268 184x90 [fill=violet]
-rect "Pricing page" @30,373 120x42
-rect "Partner deck" @170,373 120x42
-rect "FAQ" @702,373 120x42
-rect "On-call rota" @842,373 120x42
-rect "Sales" @96,471 152x51 [fill=blue]
-rect "Support" @752,471 152x51 [fill=blue]
+rect #marketing "Marketing" @96,96 152x51 [fill=blue]
+rect #engineering "Engineering" @752,96 152x51 [fill=blue]
+rect #rect1 @34,190 113x35
+rect #launch-video "Launch video" @174,190 113x35
+rect #api-freeze "API freeze" @705,190 113x35
+rect #load-test "Load test" @842,186 120x42
+ellipse #product-launch "Product Launch" @409,268 184x90 [fill=violet]
+rect #pricing-page "Pricing page" @30,373 120x42
+rect #partner-deck "Partner deck" @170,373 120x42
+rect #faq "FAQ" @702,373 120x42
+rect #on-call-rota "On-call rota" @842,373 120x42
+rect #sales "Sales" @96,471 152x51 [fill=blue]
+rect #support "Support" @752,471 152x51 [fill=blue]
 
-"Product Launch" -- "Support"
-"Product Launch" -- "Sales"
-"Product Launch" -- "Engineering"
-"Product Launch" -- "Marketing"
-"Support" -- "On-call rota"
-"Support" -- "FAQ"
-"Sales" -- "Partner deck"
-"Sales" -- "Pricing page"
-"Engineering" -- "Load test"
-"Engineering" -- "API freeze"
-"Marketing" -- "Launch video"
-"Marketing" -- rect
+#product-launch -- #support
+#product-launch -- #sales
+#product-launch -- #engineering
+#product-launch -- #marketing
+#support -- #on-call-rota
+#support -- #faq
+#sales -- #partner-deck
+#sales -- #pricing-page
+#engineering -- #load-test
+#engineering -- #api-freeze
+#marketing -- #launch-video
+#marketing -- #rect1
