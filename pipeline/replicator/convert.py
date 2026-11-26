@@ -69,17 +69,7 @@ def ocr(img: np.ndarray) -> list[Word]:
     cached = CACHE / f"ocr-{key}.json"
     if cached.exists():
         return [Word(**d) for d in json.loads(cached.read_text())]
-    global _engine
-    if _engine is None:
-        from rapidocr import LangRec, ModelType, OCRVersion, RapidOCR
-        _engine = RapidOCR(params={
-            "Global.log_level": "error",
-            "Global.use_cls": False,  # screens are never rotated; saves ~0.5 s
-            "Det.ocr_version": OCRVersion.PPOCRV5, "Det.model_type": ModelType.MOBILE,
-            "Rec.ocr_version": OCRVersion.PPOCRV5, "Rec.model_type": ModelType.MOBILE,
-            "Rec.lang_type": LangRec.EN,
-        })
-    r = _engine(img)
+    r = _get_engine()(img)
     words = []
     if r.boxes is not None:
         for box, txt, score in zip(r.boxes, r.txts, r.scores):
@@ -91,10 +81,60 @@ def ocr(img: np.ndarray) -> list[Word]:
     return words
 
 
+def _get_engine():
+    global _engine
+    if _engine is None:
+        from rapidocr import LangRec, ModelType, OCRVersion, RapidOCR
+        _engine = RapidOCR(params={
+            "Global.log_level": "error",
+            "Global.use_cls": False,  # screens are never rotated; saves ~0.5 s
+            "Det.ocr_version": OCRVersion.PPOCRV5, "Det.model_type": ModelType.MOBILE,
+            "Rec.ocr_version": OCRVersion.PPOCRV5, "Rec.model_type": ModelType.MOBILE,
+            "Rec.lang_type": LangRec.EN,
+        })
+    return _engine
+
+
 def all_words(words: list[Word]) -> list[Word]:
     """Every plausible OCR box, including ones too unsure to keep as text: used
     for erasing glyphs so they don't come back as icons or shapes."""
     return [w for w in words if w.score >= 0.3]
+
+
+def ocr_inside(img: np.ndarray, shapes: list, words: list[Word], med_h: float):
+    """Detection misses lone glyphs (a "1" in a circle); recognise small textless
+    shapes' interiors directly, in one batched recognition call.
+
+    Returns (words found, shapes they were found in)."""
+    from rapidocr.ch_ppocr_rec.typings import TextRecInput
+
+    cands, crops, boxes = [], [], []
+    for n in sorted(shapes, key=lambda n: -n.area):  # outer shapes first
+        if n.kind not in ("rect", "ellipse", "diamond") or max(n.w, n.h) > 4 * med_h:
+            continue
+        if n.kind == "rect" and not 0.6 < n.w / n.h < 1.7:
+            continue  # lone glyphs live in circles, diamonds and squarish boxes
+        if any(n.contains(w, 0) or (n.x <= w.cx <= n.x2 and n.y <= w.cy <= n.y2) for w in words):
+            continue
+        if any(c.contains(n, 0) for c in cands):
+            continue  # a glyph hole inside a candidate
+        ix, iy = int(n.w * 0.18), int(n.h * 0.18)  # stay clear of the outline
+        crop = img[n.y + iy:n.y2 - iy, n.x + ix:n.x2 - ix]
+        if crop.size == 0:
+            continue
+        cands.append(n)
+        crops.append(crop)
+        boxes.append((n.x + ix, n.y + iy, n.w - 2 * ix, n.h - 2 * iy))
+    if not crops:
+        return [], []
+    out = _get_engine()._load_rec_model()(TextRecInput(img=crops))
+    found, filled = [], []
+    for n, box, txt, score in zip(cands, boxes, out.txts, out.scores):
+        txt = txt.strip()
+        if score >= 0.8 and any(ch.isalnum() for ch in txt):
+            found.append(Word(txt, *box, float(score)))
+            filled.append(n)
+    return found, filled
 
 
 def clean_words(words: list[Word]) -> list[Word]:
@@ -191,6 +231,23 @@ def iou(a, b) -> float:
     return inter / (a.area + b.area - inter) if inter else 0.0
 
 
+def _is_ellipse(c, w, h, ratio) -> bool:
+    """Convex hull fills ~pi/4 of the box. Using the hull tolerates notches where
+    lines, arrowheads or leftover glyph pixels touch the outline from inside."""
+    hull = cv2.contourArea(cv2.convexHull(c)) / (w * h)
+    return 0.72 < hull < 0.84 and ratio / hull > 0.72
+
+
+def _outline_support(edges: np.ndarray, x, y, w, h) -> float:
+    """Fraction of the bbox-inscribed ellipse outline that lies on edge pixels."""
+    pts = cv2.ellipse2Poly((x + w // 2, y + h // 2), (w // 2, h // 2), 0, 0, 360, 4)
+    H, W = edges.shape
+    pts = pts[(pts[:, 0] >= 0) & (pts[:, 0] < W) & (pts[:, 1] >= 0) & (pts[:, 1] < H)]
+    if not len(pts):
+        return 0.0
+    return float((edges[pts[:, 1], pts[:, 0]] > 0).mean())
+
+
 def _is_diamond(c, x, y, w, h) -> bool:
     """Extreme points sit near the middles of the bounding box sides."""
     pts = c.reshape(-1, 2)
@@ -208,6 +265,7 @@ def find_shapes(edges: np.ndarray, min_size=24) -> list[Node]:
     # blunts sharp corners, so diamonds/ellipses come from the plain pass.
     bridged = plain | cv2.morphologyEx(plain, cv2.MORPH_CLOSE, np.ones((1, 15), np.uint8))
     bridged |= cv2.morphologyEx(bridged, cv2.MORPH_CLOSE, np.ones((15, 1), np.uint8))
+    near = cv2.dilate(plain, np.ones((5, 5), np.uint8))  # outline support tolerance
     contours = []
     for m in (plain, bridged):
         contours += cv2.findContours(m, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)[0]
@@ -220,7 +278,8 @@ def find_shapes(edges: np.ndarray, min_size=24) -> list[Node]:
         poly = cv2.approxPolyDP(c, 0.02 * cv2.arcLength(c, True), True)
         if ratio > 0.88:
             kind = "rect"
-        elif 0.72 < ratio < 0.84 and len(poly) > 6 and 0.4 < w / h < 2.5:
+        elif 0.4 < w / h < 2.5 and len(poly) > 6 and _is_ellipse(c, w, h, ratio) \
+                and _outline_support(near, x, y, w, h) > 0.8:
             kind = "ellipse"
         elif 0.42 < ratio < 0.6 and 4 <= len(poly) <= 6 and _is_diamond(c, x, y, w, h):
             kind = "diamond"
@@ -797,6 +856,9 @@ def convert(img: np.ndarray) -> Result:
             s.kind = "image"
         else:
             s.fill = shape_fill(clean, s, bg)
+    # contours inside a word's box are pieces of its letters ("0", "6", "8" holes)
+    shapes = [s for s in shapes if not any(
+        w.x - 4 <= s.x and w.y - 4 <= s.y and s.x2 <= w.x2 + 4 and s.y2 <= w.y2 + 4 for w in words)]
     # contours found inside a photo are part of the picture
     images = [s for s in shapes if s.kind == "image"]
     shapes = [s for s in shapes if not any(i is not s and i.contains(s, 0) for i in images)]
@@ -811,13 +873,23 @@ def convert(img: np.ndarray) -> Result:
     for a, b, *_ in conns:
         a.connected = b.connected = True
     med_h = float(np.median([w.h for w in words])) if words else 20.0
+
+    # Diagram nodes with no text are usually a lone glyph OCR detection missed
+    # (a "1" in a circle): recognise just those interiors.
+    inside, filled = ocr_inside(img, [s for s in shapes if s.connected], words, med_h)
+    words += inside
+    # contours nested in a shape whose text we just read are pieces of that glyph
+    glyph_bits = {id(s) for s in shapes if any(f is not s and f.contains(s, 0) for f in filled)}
+    shapes = [s for s in shapes if id(s) not in glyph_bits]
+    conns = [c for c in conns if id(c[0]) not in glyph_bits and id(c[1]) not in glyph_bits]
+    lap("glyphs")
     # small textless circles/squares (avatars, emoji, buttons) are icons themselves
     for sh in shapes:
         small = max(sh.w, sh.h) <= 3 * med_h
         if small and not sh.connected and sh.kind in ("ellipse", "rect") and not any(
                 sh.contains(w, 0) for w in words):
             sh.kind, sh.fill = "icon", None
-    icons = guessed + find_icons(clean, glyphs, shapes, conns, med_h)
+    icons = guessed + find_icons(clean, glyphs + inside, shapes, conns, med_h)
     icons = [i for i in icons if not any(sh.kind == "icon" and sh.contains(i, 2) for sh in shapes)]
 
     lap("icons")
