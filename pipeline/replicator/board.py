@@ -6,12 +6,12 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 
-SHAPE_KINDS = ("rect", "ellipse", "diamond", "image", "icon")
+SHAPE_KINDS = ("rect", "ellipse", "diamond", "image", "icon", "icons", "group")
 
 
 @dataclass
 class Shape:
-    kind: str  # rect | ellipse | diamond | image | icon
+    kind: str  # rect | ellipse | diamond | image | icon | icons (a run of n icons) | group (invisible)
     x: float
     y: float
     w: float
@@ -97,7 +97,56 @@ def _style(style: dict) -> str:
     return f" [{' '.join(parts)}]" if parts else ""
 
 
-def reading_order(items):
+def _gaps(items, axis: str, min_gap: float) -> list[float]:
+    """Cut positions along x or y where no item crosses and the gap is wide enough."""
+    if axis == "x":
+        spans = sorted((n.x, n.x + n.w) for n in items)
+    else:
+        spans = sorted((n.y, n.y + n.h) for n in items)
+    cuts, end = [], spans[0][1]
+    for lo, hi in spans[1:]:
+        if lo - end >= min_gap:
+            cuts.append((end + lo) / 2)
+        end = max(end, hi)
+    return cuts
+
+
+def _split(items, axis: str, cuts: list[float]):
+    parts = [[] for _ in range(len(cuts) + 1)]
+    for n in items:
+        c = (n.x + n.w / 2) if axis == "x" else (n.y + n.h / 2)
+        parts[sum(c > k for k in cuts)].append(n)
+    return [p for p in parts if p]
+
+
+def layout_blocks(items, min_gap: float = 8.0, depth: int = 0):
+    """Recursive XY-cut on item boxes: full-width bands top-to-bottom, then
+    columns left-to-right. Returns a nested list ("blocks") in reading order."""
+    if len(items) <= 2 or depth > 8:
+        return _row_order(items)
+    ycuts = _gaps(items, "y", min_gap)
+    if ycuts:
+        return [layout_blocks(p, min_gap, depth + 1) for p in _split(items, "y", ycuts)]
+    xcuts = _gaps(items, "x", min_gap)
+    if xcuts:
+        return [layout_blocks(p, min_gap, depth + 1) for p in _split(items, "x", xcuts)]
+    return _row_order(items)
+
+
+def _flatten(blocks):
+    for b in blocks:
+        if isinstance(b, list):
+            yield from _flatten(b)
+        else:
+            yield b
+
+
+def reading_order(items, min_gap: float = 8.0):
+    """Reading order that respects layout: bands, then columns, then rows."""
+    return list(_flatten(layout_blocks(list(items), min_gap)))
+
+
+def _row_order(items):
     """Sort into rows (top-to-bottom), each row left-to-right.
 
     An item joins the current row when its top or its centre lines up with the
@@ -168,6 +217,8 @@ def serialize(board: Board) -> str:
                     lines.append(f"{pad}  " + " | ".join(quote(c) for c in row))
             else:
                 head = node.kind
+                if node.kind == "icons":
+                    head += f" {node.style.get('_n', 0)}"
                 if node.id:
                     head += f" {node.id}"
                 if node.label:

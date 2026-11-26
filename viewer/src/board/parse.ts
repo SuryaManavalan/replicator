@@ -1,6 +1,6 @@
 // Parser for the v0 board syntax (see syntax/SPEC.md).
 
-export type ShapeKind = "rect" | "ellipse" | "diamond" | "image" | "icon";
+export type ShapeKind = "rect" | "ellipse" | "diamond" | "image" | "icon" | "icons" | "group";
 export type EdgeKind = "->" | "<-" | "<->" | "--";
 export type Style = Record<string, string | true>;
 export interface Geom { x: number; y: number; w?: number; h?: number }
@@ -13,6 +13,8 @@ export interface ShapeNode {
   geom?: Geom;
   style: Style;
   children: BoardNode[];
+  /** for `icons N`: how many icons in the run */
+  count?: number;
   line: number;
 }
 
@@ -56,7 +58,7 @@ export interface Board {
   errors: ParseError[];
 }
 
-const SHAPES = new Set(["rect", "ellipse", "diamond", "image", "icon"]);
+const SHAPES = new Set(["rect", "ellipse", "diamond", "image", "icon", "icons", "group"]);
 
 type Tok =
   | { t: "str"; v: string }
@@ -222,13 +224,15 @@ export function parse(src: string): Board {
       let i = 1;
       let id: string | undefined;
       let label: string | undefined;
+      let count: number | undefined;
+      if (first.v === "icons" && toks[i]?.t === "nums") count = (toks[i++] as { v: number[] }).v[0];
       const k1 = toks[i];
       if (k1?.t === "word") { id = k1.v; i++; }
       const k2 = toks[i];
       if (k2?.t === "str") { label = k2.v; i++; }
       const { geom, style, rest } = tail(toks, i);
       if (rest.length) err("unexpected tokens after shape");
-      node = { type: "shape", kind: first.v as ShapeKind, id, label, geom, style, children: [], line };
+      node = { type: "shape", kind: first.v as ShapeKind, id, label, geom, style, children: [], count, line };
     } else if (first.t === "str") {
       const { geom, style, rest } = tail(toks, 1);
       if (rest.length) err("unexpected tokens after text");

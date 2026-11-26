@@ -12,7 +12,7 @@ from pathlib import Path
 import cv2
 
 from .board import Board, Shape, Table, Text
-from .convert import convert
+from .convert import convert, tidy_board
 from .synth import SCENES, draw_board
 
 SAMPLES = Path(__file__).resolve().parents[2] / "samples" / "synthetic"
@@ -102,7 +102,7 @@ def main():
     verbose = "-v" in sys.argv
     print(f"{'scene':18} {'text R/P':>12} {'shapes R/P':>12} {'edges R/P':>12}")
     for name_, build in SCENES.items():
-        truth = build()
+        truth = tidy_board(build())
         img = cv2.imread(str(SAMPLES / f"{name_}.png"))
         if img is None:
             draw_board(truth).save(SAMPLES / f"{name_}.png")

@@ -158,6 +158,15 @@ export function toSkeletons(board: Board, opts: RenderOptions): ConvertResult {
       const lines = n.text.split("\n");
       // Excalidraw's fonts are wider than most screen fonts: also fit the width.
       const fontSize = fitFont(n.text, n.geom?.w ?? 0, b.h / (lines.length * LINE_HEIGHT));
+      if (n.style.icon) {
+        // [icon]: a small symbol just left of the text
+        const s = Math.min(b.h / lines.length, 28) * 0.8;
+        skeletons.push({
+          type: "rectangle", x: b.x - s - 6, y: b.y + (b.h / lines.length - s) / 2, width: s, height: s,
+          roughness: opts.sketchy ? 1 : 0, strokeColor: "#868e96", strokeWidth: 1,
+          backgroundColor: "#e9ecef", fillStyle: "solid", roundness: { type: 3 },
+        });
+      }
       skeletons.push({
         type: "text", x: b.x, y: b.y, text: n.text, fontSize, fontFamily,
         strokeColor: color(STROKE, n.style.color) ?? "#1e1e1e",
@@ -173,6 +182,24 @@ export function toSkeletons(board: Board, opts: RenderOptions): ConvertResult {
     elemId.set(n, id);
     const fill = color(FILL, n.style.fill);
     const isContainer = n.children.length > 0;
+    if (n.kind === "group") {
+      // an invisible layout column: just its children
+      n.children.forEach(visit);
+      return;
+    }
+    if (n.kind === "icons") {
+      const k = Math.max(1, n.count ?? 1);
+      const s = Math.min(b.h, b.w / k);
+      const step = k > 1 ? (b.w - s) / (k - 1) : 0;
+      for (let i = 0; i < k; i++) {
+        skeletons.push({
+          type: "rectangle", x: b.x + i * step, y: b.y + (b.h - s) / 2, width: s, height: s,
+          roughness: opts.sketchy ? 1 : 0, strokeColor: "#868e96", strokeWidth: 1,
+          backgroundColor: "#e9ecef", fillStyle: "solid", roundness: { type: 3 },
+        });
+      }
+      return;
+    }
     if (n.kind === "icon" || n.kind === "image") {
       // placeholders: a soft rounded square for icons, a crossed box for images
       const icon = n.kind === "icon";

@@ -6,19 +6,21 @@ rect @0,0 1000x50 [fill=gray stroke=gray]
   "Log out" @867,17 53x17
   image @948,8 34x34
 rect @0,50 172x575 [stroke=gray]
-  icon @19,76 16x16
-  "Overview" @44,75 74x17 [bold]
-  icon @19,110 16x16
-  "Reports" @44,109 55x17
-  icon @19,145 16x16
-  "Customers" @44,144 76x17
-  icon @19,179 16x16
-  "Billing" @44,178 44x17
+  "Overview" @44,75 74x17 [bold icon]
+  "Reports" @44,109 55x17 [icon]
+  "Customers" @44,144 76x17 [icon]
+  "Billing" @44,178 44x17 [icon]
   "Help" @19,578 33x17
 "Overview" @203,75 124x30 [bold]
 rect @203,125 234x109 [stroke=gray]
   "Revenue" @219,141 62x17
   "$48,210" @219,172 128x35 [bold]
+rect @461,125 234x109 [stroke=gray]
+  "Active users" @477,141 87x17
+  "1,204" @477,172 89x35 [bold]
+rect @719,125 234x109 [stroke=gray]
+  "Churn" @734,141 42x17
+  "2.1%" @734,172 78x35 [bold]
 rect @203,266 750x312 [stroke=gray]
   "Recent orders" @219,281 124x20 [bold]
   table @219,328 545x172 cols 219,328,531,703 [size=12]
@@ -27,9 +29,3 @@ rect @203,266 750x312 [stroke=gray]
     "#1041" | "Wade Warren" | "$89.50" | "Pending"
     "#1040" | "Esther Howard" | "$240.00" | "Shipped"
     "#1039" | "Cameron Lee" | "$15.99" | "Refunded"
-rect @461,125 234x109 [stroke=gray]
-  "Active users" @477,141 87x17
-  "1,204" @477,172 89x35 [bold]
-rect @719,125 234x109 [stroke=gray]
-  "Churn" @734,141 42x17
-  "2.1%" @734,172 78x35 [bold]

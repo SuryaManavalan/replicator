@@ -1,6 +1,6 @@
 board 1000x625
 
-"Order Flow" @44,28 163x34
+"Order Flow" @44,28 163x34 [bold]
 rect "Receive order" @61,233 144x66 [fill=blue]
 rect "Check stock" @264,233 144x66
 diamond "In stock?" @468,218 142x96 [fill=yellow]

@@ -26,7 +26,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .board import Board, Edge, Shape, Table, Text, scale_board, serialize
+from .board import Board, Edge, Shape, Table, Text, _gaps, _split, scale_board, serialize
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / ".cache"
@@ -49,6 +49,7 @@ class Word:
     w: int
     h: int
     score: float
+    bold: bool = False
 
     @property
     def x2(self): return self.x + self.w
@@ -93,6 +94,33 @@ def _get_engine():
             "Rec.lang_type": LangRec.EN,
         })
     return _engine
+
+
+def stroke_ratio(gray: np.ndarray, w: Word) -> float | None:
+    """Stroke width relative to text height: 2*area/perimeter of the glyph ink."""
+    patch = gray[w.y:w.y2, w.x:w.x2]
+    if patch.shape[0] < 8 or patch.shape[1] < 8:
+        return None
+    t, _ = cv2.threshold(patch, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    ink = (patch < t) if (patch >= t).mean() > 0.5 else (patch >= t)  # glyphs are the minority
+    ink = ink.astype(np.uint8)
+    area = int(ink.sum())
+    if area < 20:
+        return None
+    contours, _ = cv2.findContours(ink, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    perim = sum(cv2.arcLength(c, True) for c in contours)
+    return (2 * area / max(perim, 1)) / w.h if perim else None
+
+
+def mark_bold(gray: np.ndarray, words: list[Word]) -> None:
+    """Bold = noticeably thicker strokes than the screen's typical text."""
+    ratios = [stroke_ratio(gray, w) for w in words]
+    vals = [r for r in ratios if r is not None]
+    if len(vals) < 4:
+        return
+    med = float(np.median(vals))
+    for w, r in zip(words, ratios):
+        w.bold = r is not None and r > 1.3 * med
 
 
 def all_words(words: list[Word]) -> list[Word]:
@@ -188,6 +216,58 @@ def erase_text(img: np.ndarray, words: list[Word], pad=3) -> np.ndarray:
     return out
 
 
+def bridge_lines(img: np.ndarray, words: list[Word], pad=3, reach=24) -> np.ndarray:
+    """Redraw thin lines that a text label interrupts (a label sitting on an
+    arrow or on a box border). A column/row counts as a line passing through
+    when ink continues on BOTH sides of the box and is thin (not a border
+    running along the box)."""
+    out = img.copy()
+    H, W = img.shape[:2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.int16)
+    for w in words:
+        x0, y0 = max(w.x - pad, 0), max(w.y - pad, 0)
+        x1, y1 = min(w.x2 + pad, W - 1), min(w.y2 + pad, H - 1)
+        if y0 - reach < 0 or y1 + reach >= H or x0 - reach < 0 or x1 + reach >= W:
+            continue
+        bg = float(np.median(gray[y0:y1, x0:x1]))
+        def is_ink(region):
+            return np.abs(region - bg) > 40
+
+        def runs_out(strip: np.ndarray) -> np.ndarray:
+            """Per column of `strip` (row 0 = next to the box): does ink start
+            within reach and continue outward for >= 5 px? A line passing
+            through does; a border it merely bumps into doesn't."""
+            first = np.argmax(strip, axis=0)
+            hit = strip.any(axis=0)
+            ok = np.zeros(strip.shape[1], bool)
+            for c in np.flatnonzero(hit):
+                k = first[c]
+                ok[c] = strip[k:k + 5, c].sum() >= 5
+            return ok
+
+        # vertical lines crossing top and bottom edges
+        up = is_ink(gray[y0 - reach:y0, x0:x1])[::-1]  # row 0 = just above the box
+        down = is_ink(gray[y1:y1 + reach, x0:x1])
+        cols = np.flatnonzero(runs_out(up) & runs_out(down))
+        if 0 < len(cols) <= 6:  # a thin line, not a border running along the box
+            for c in cols:
+                ya = y0 - 1 - int(np.argmax(up[:, c]))
+                yb = y1 + int(np.argmax(down[:, c]))
+                colour = img[ya, x0 + int(c)].tolist()
+                cv2.line(out, (x0 + int(c), ya), (x0 + int(c), yb), colour, 1)
+        # horizontal lines crossing left and right edges
+        lt = is_ink(gray[y0:y1, x0 - reach:x0])[:, ::-1]  # col 0 = just left of the box
+        rt = is_ink(gray[y0:y1, x1:x1 + reach])
+        rows = np.flatnonzero(runs_out(lt.T) & runs_out(rt.T))
+        if 0 < len(rows) <= 6:
+            for r in rows:
+                xa = x0 - 1 - int(np.argmax(lt[r]))
+                xb = x1 + int(np.argmax(rt[r]))
+                colour = img[y0 + int(r), xa].tolist()
+                cv2.line(out, (xa, y0 + int(r)), (xb, y0 + int(r)), colour, 1)
+    return out
+
+
 def edge_map(img: np.ndarray) -> np.ndarray:
     blur = cv2.GaussianBlur(img, (3, 3), 0)
     e = np.zeros(img.shape[:2], np.uint8)
@@ -238,6 +318,16 @@ def _is_ellipse(c, w, h, ratio) -> bool:
     return 0.72 < hull < 0.84 and ratio / hull > 0.72
 
 
+def _rect_outline_support(edges: np.ndarray, x, y, w, h, step=3) -> float:
+    """Fraction of the bbox perimeter lying on edge pixels."""
+    H, W = edges.shape
+    xs = np.arange(x, x + w, step).clip(0, W - 1)
+    ys = np.arange(y, y + h, step).clip(0, H - 1)
+    y2, x2 = min(y + h - 1, H - 1), min(x + w - 1, W - 1)
+    vals = np.concatenate([edges[y, xs], edges[y2, xs], edges[ys, x], edges[ys, x2]])
+    return float((vals > 0).mean())
+
+
 def _outline_support(edges: np.ndarray, x, y, w, h) -> float:
     """Fraction of the bbox-inscribed ellipse outline that lies on edge pixels."""
     pts = cv2.ellipse2Poly((x + w // 2, y + h // 2), (w // 2, h // 2), 0, 0, 360, 4)
@@ -278,6 +368,9 @@ def find_shapes(edges: np.ndarray, min_size=24) -> list[Node]:
         poly = cv2.approxPolyDP(c, 0.02 * cv2.arcLength(c, True), True)
         if ratio > 0.88:
             kind = "rect"
+        elif w > 3 * min_size and h > 3 * min_size and _rect_outline_support(near, x, y, w, h) > 0.92 \
+                and cv2.contourArea(cv2.convexHull(c)) / (w * h) > 0.95:
+            kind = "rect"  # a container whose inside is cut into by attached lines/boxes
         elif 0.4 < w / h < 2.5 and len(poly) > 6 and _is_ellipse(c, w, h, ratio) \
                 and _outline_support(near, x, y, w, h) > 0.8:
             kind = "ellipse"
@@ -605,12 +698,16 @@ def _ink(img: np.ndarray) -> np.ndarray:
 
 
 def _mask_shapes(ink: np.ndarray, shapes: list[Node], grow: int) -> np.ndarray:
+    """Blank out shapes. Containers (shapes with other shapes inside) only lose
+    their border band, so arrows drawn inside them survive."""
     ink = ink.copy()
     for n in shapes:
+        container = any(o is not n and n.contains(o, 0) for o in shapes)
+        thick = -1 if not container else 2 * grow + 3
         if n.kind == "ellipse":
-            cv2.ellipse(ink, (n.x + n.w // 2, n.y + n.h // 2), (n.w // 2 + grow, n.h // 2 + grow), 0, 0, 360, 0, -1)
+            cv2.ellipse(ink, (n.x + n.w // 2, n.y + n.h // 2), (n.w // 2 + grow, n.h // 2 + grow), 0, 0, 360, 0, thick)
         else:
-            cv2.rectangle(ink, (n.x - grow, n.y - grow), (n.x2 + grow, n.y2 + grow), 0, -1)
+            cv2.rectangle(ink, (n.x - grow, n.y - grow), (n.x2 + grow, n.y2 + grow), 0, thick)
     return ink
 
 
@@ -768,7 +865,7 @@ def merge_lines(words: list[Word]) -> list[Word]:
     for w in sorted(words, key=lambda w: (w.y, w.x)):
         for p in out:
             last_h = p.h / (p.text.count("\n") + 1)
-            if (abs(w.x - p.x) < 0.6 * last_h and 0.75 < w.h / last_h < 1.33
+            if (p.bold == w.bold and abs(w.x - p.x) < 0.6 * last_h and 0.75 < w.h / last_h < 1.33
                     and -0.2 * last_h < w.y - p.y2 < 0.35 * last_h):
                 x, y = min(p.x, w.x), p.y
                 p.text += "\n" + w.text
@@ -776,14 +873,118 @@ def merge_lines(words: list[Word]) -> list[Word]:
                 p.score = min(p.score, w.score)
                 break
         else:
-            out.append(Word(w.text, w.x, w.y, w.w, w.h, w.score))
+            out.append(Word(w.text, w.x, w.y, w.w, w.h, w.score, w.bold))
+    return out
+
+
+def _text(w: Word) -> Text:
+    return Text(w.text, w.x, w.y, w.w, w.h, {"bold": True} if w.bold else {})
+
+
+def _bbox(items):
+    x, y = min(n.x for n in items), min(n.y for n in items)
+    return x, y, max(n.x + n.w for n in items) - x, max(n.y + n.h for n in items) - y
+
+
+def tidy(items: list) -> list:
+    """Make a container's children cheaper to read:
+    - an icon just left of a label becomes the label's [icon] flag
+    - a row of 3+ icons becomes one `icons N` element
+    """
+    icons = [n for n in items if isinstance(n, Shape) and n.kind == "icon" and not n.children]
+    texts = [n for n in items if isinstance(n, Text)]
+    used = set()
+    for ic in icons:
+        for t in texts:
+            line_h = t.h / (t.text.count("\n") + 1)
+            gap = t.x - (ic.x + ic.w)
+            if -0.5 * ic.w <= gap <= max(1.5 * ic.w, 12) and abs((t.y + line_h / 2) - (ic.y + ic.h / 2)) < 0.6 * line_h:
+                t.style["icon"] = True
+                used.add(id(ic))
+                break
+    rest = [n for n in items if id(n) not in used]
+
+    # runs of icons along a row
+    icons = sorted((n for n in rest if isinstance(n, Shape) and n.kind == "icon" and not n.children),
+                   key=lambda n: (n.y + n.h / 2, n.x))
+    others = [n for n in rest if not (isinstance(n, Shape) and n.kind == "icon")]
+    rows: list[list] = []
+    for ic in icons:
+        for row in rows:
+            r0 = row[0]
+            if abs((ic.y + ic.h / 2) - (r0.y + r0.h / 2)) < 0.5 * max(ic.h, r0.h):
+                row.append(ic)
+                break
+        else:
+            rows.append([ic])
+    merged = set()
+    out_runs = []
+    for row in rows:
+        row.sort(key=lambda n: n.x)
+        run = [row[0]]
+
+        def flush(run):
+            if len(run) >= 3:
+                x, y, w, h = _bbox(run)
+                out_runs.append(Shape("icons", x, y, w, h, style={"_n": len(run)}))
+                merged.update(id(n) for n in run)
+
+        for ic in row[1:]:
+            prev = run[-1]
+            gap = ic.x - (prev.x + prev.w)
+            blocked = any(prev.x + prev.w <= o.x + o.w / 2 <= ic.x and
+                          abs((o.y + o.h / 2) - (ic.y + ic.h / 2)) < max(ic.h, o.h) for o in others)
+            if gap <= 6 * max(ic.w, prev.w) and not blocked:
+                run.append(ic)
+            else:
+                flush(run)
+                run = [ic]
+        flush(run)
+    return [n for n in rest if id(n) not in merged] + out_runs
+
+
+def tidy_board(board: Board) -> Board:
+    """Apply the tidy pass to every container (used for hand-built ground truth)."""
+    def rec(items):
+        for n in items:
+            if isinstance(n, Shape) and n.children:
+                n.children = tidy(rec(n.children))
+        return items
+    board.items = group_columns(tidy(rec(board.items)), min_gap=max(8.0, 0.008 * board.w))
+    return board
+
+
+def group_columns(items: list, min_gap: float, depth: int = 0, ref_h: float | None = None) -> list:
+    """Wrap real layout columns (side-by-side stacks of content) in `group`s so
+    a reader sees "left nav / feed / sidebar" instead of interleaved rows."""
+    if len(items) < 4 or depth > 4:
+        return items
+    if ref_h is None:  # columns must be tall relative to the whole container, not a band
+        ref_h = _bbox(items)[3]
+    ycuts = _gaps(items, "y", min_gap)
+    if ycuts:  # full-width bands: recurse, don't group
+        return [n for band in _split(items, "y", ycuts) for n in group_columns(band, min_gap, depth + 1, ref_h)]
+    xcuts = _gaps(items, "x", min_gap)
+    if not xcuts:
+        return items
+    cols = _split(items, "x", xcuts)
+    tall = [c for c in cols if len(c) >= 3 and _bbox(c)[3] >= 0.4 * ref_h]
+    if len(tall) < 2:
+        return items
+    out = []
+    for c in cols:
+        inner = group_columns(c, min_gap, depth + 1, _bbox(c)[3])
+        if any(c is t for t in tall):
+            out.append(Shape("group", *_bbox(c), children=inner))
+        else:
+            out.extend(inner)
     return out
 
 
 def to_board(root: Node, W: int, H: int, connectors) -> Board:
     def texts(words: list[Word]):
         tables, rest = find_tables(words)
-        return [Text(w.text, w.x, w.y, w.w, w.h) for w in merge_lines(rest)] + tables
+        return [_text(w) for w in merge_lines(rest)] + tables
 
     def build(n: Node) -> Shape:
         tables, rest = find_tables(n.words)
@@ -797,12 +998,13 @@ def to_board(root: Node, W: int, H: int, connectors) -> Board:
             if abs(w.cx - (n.x + n.w / 2)) < 0.15 * n.w and abs(w.cy - (n.y + n.h / 2)) < 0.2 * n.h:
                 label, words = w.text, []
         s = Shape(n.kind, n.x, n.y, n.w, n.h, label=label, style=style)
-        s.children = [Text(w.text, w.x, w.y, w.w, w.h) for w in words] + tables + [build(k) for k in n.kids]
+        s.children = tidy([_text(w) for w in words] + tables + [build(k) for k in n.kids])
         n.shape = s
         return s
 
     items = texts(root.words)
     items += [build(k) for k in root.kids]
+    items = group_columns(tidy(items), min_gap=max(8.0, 0.008 * W))
     edges = [Edge(a.shape, b.shape, label, kind) for a, b, kind, _, label in connectors
              if a.shape is not None and b.shape is not None]
     return Board(W, H, items, edges)
@@ -840,7 +1042,8 @@ def convert(img: np.ndarray) -> Result:
     _, guessed = misread_icons(glyphs, [])
     guessed_ids = {(g.x, g.y) for g in guessed}
     words = clean_words([Word(**w.__dict__) for w in raw if (w.x, w.y) not in guessed_ids])
-    clean = erase_text(img, glyphs)
+    mark_bold(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), words)
+    clean = bridge_lines(erase_text(img, glyphs), glyphs)
     lap("erase_text")
     edges = edge_map(clean)
     lap("edges")

@@ -349,7 +349,8 @@ def main():
     for name, build in SCENES.items():
         board = build()
         draw_board(board).save(out / f"{name}.png")
-        (out / f"{name}.board").write_text(serialize(scale_board(board, 1000)))
+        from .convert import tidy_board
+        (out / f"{name}.board").write_text(serialize(scale_board(tidy_board(board), 1000)))
         print(f"wrote {name}")
 
 
