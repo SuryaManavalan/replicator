@@ -7,3 +7,5 @@ samples/real/
 .cache/
 out/
 samples/video/*/
+samples/video/real-*
+samples/web/

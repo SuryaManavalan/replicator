@@ -229,6 +229,7 @@ def erase_text(img: np.ndarray, words: list[Word], pad=3) -> np.ndarray:
         n, labels, stats, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
         bh, bw = ink.shape
         erase = np.zeros_like(ink, bool)
+        keep = np.zeros_like(ink, bool)
         for i in range(1, n):
             cx, cy, cw, ch = stats[i, :4]
             touches_edge = not (cx > 0 and cy > 0 and cx + cw < bw and cy + ch < bh)
@@ -236,8 +237,19 @@ def erase_text(img: np.ndarray, words: list[Word], pad=3) -> np.ndarray:
             thin_stroke = ch <= 3 and cw >= max(10, 0.6 * w.h)
             if not touches_edge and not thin_stroke:
                 erase |= labels == i
-        # anti-aliased glyph edges sit just outside the thresholded blob
-        erase = cv2.dilate(erase.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
+            else:
+                keep |= labels == i
+        # Anti-aliasing and video-compression halos sit around the glyphs and are
+        # fainter than the threshold above: widen the erase, and take faint ink
+        # inside the text's own span too — but never the lines we decided to keep.
+        if erase.any():
+            # faint ink only right around the glyphs: a flat fill over a wider
+            # area leaves a visible seam where it meets the real background
+            near = cv2.dilate(erase.astype(np.uint8), np.ones((9, 9), np.uint8)).astype(bool)
+            faint = np.abs(box.astype(np.int16) - bg).max(axis=2) > 15
+            keep = cv2.dilate(keep.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
+            erase = cv2.dilate(erase.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+            erase = (erase | (faint & near)) & ~keep
         out[y0:y1, x0:x1][erase] = bg
     return out
 
@@ -383,14 +395,18 @@ def find_shapes(edges: np.ndarray, min_size=24) -> list[Node]:
     bridged |= cv2.morphologyEx(bridged, cv2.MORPH_CLOSE, np.ones((15, 1), np.uint8))
     near = cv2.dilate(plain, np.ones((5, 5), np.uint8))  # outline support tolerance
     contours = []
-    for m in (plain, bridged):
-        contours += cv2.findContours(m, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)[0]
+    for src, m in (("plain", plain), ("bridged", bridged)):
+        contours += [(src, c) for c in cv2.findContours(m, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)[0]]
     cands: list[Node] = []
-    for c in contours:
+    sources: dict[int, str] = {}
+    boxy: list[Node] = []  # near-rectangular plain outlines: evidence for the stacking check
+    for src, c in contours:
         x, y, w, h = cv2.boundingRect(c)
         if w < min_size or h < min_size or (w > W - 8 and h > H - 8):
             continue
         ratio = cv2.contourArea(c) / (w * h)
+        if src == "plain" and ratio > 0.8:
+            boxy.append(Node("rect", x, y, w, h))
         poly = cv2.approxPolyDP(c, 0.02 * cv2.arcLength(c, True), True)
         if ratio > 0.88:
             kind = "rect"
@@ -404,14 +420,43 @@ def find_shapes(edges: np.ndarray, min_size=24) -> list[Node]:
             kind = "diamond"
         else:
             continue
-        cands.append(Node(kind, x, y, w, h))
+        node = Node(kind, x, y, w, h)
+        sources[id(node)] = src
+        cands.append(node)
+    # Bridging joins the collinear sides of closely stacked boxes into one tall
+    # "box": a bridged-only shape that is really 2+ plain shapes side by side goes.
+    plain_c = [n for n in cands if sources[id(n)] == "plain"]
+    def stacked(n: Node) -> bool:
+        """Boxes stacked with tiny gaps that together span n edge to edge."""
+        if any(iou(n, p) > 0.85 for p in plain_c if p is not n):
+            return False
+        inner = [p for p in boxy if n.contains(p, 6) and p.area < 0.8 * n.area]
+        inner = [p for p in inner if not any(q is not p and q.contains(p, 6) and q.area < 0.8 * n.area for q in inner)]
+        inner.sort(key=lambda p: p.y)
+        if len(inner) < 2 or sum(p.area for p in inner) < 0.5 * n.area:
+            return False
+        if min(p.x for p in inner) - n.x > 12 or n.x2 - max(p.x2 for p in inner) > 12:
+            return False
+        gaps = [b.y - a.y2 for a, b in zip(inner, inner[1:])]
+        return all(g <= 20 for g in gaps) and inner[0].y - n.y <= 20 and n.y2 - inner[-1].y2 <= 20
+    cands = [n for n in cands if not stacked(n)]
     # A stroked outline yields an outer and an inner contour: keep the outer.
     cands.sort(key=lambda n: -n.area)
     kept: list[Node] = []
     for n in cands:
-        if all(iou(n, k) < 0.85 and not _same_outline(k, n) for k in kept):
+        if all(iou(n, k) < 0.85 and not _same_outline(k, n) and not _fragment_of(k, n) for k in kept):
             kept.append(n)
     return kept
+
+
+def _fragment_of(outer: Node, inner: Node, tol=8) -> bool:
+    """A piece of outer's inside, cut off by leftover marks: flush with 3+ of
+    its sides (a real nested shape has its own margins)."""
+    if not outer.contains(inner, tol):
+        return False
+    flush = (abs(inner.x - outer.x) <= tol, abs(inner.y - outer.y) <= tol,
+             abs(inner.x2 - outer.x2) <= tol, abs(inner.y2 - outer.y2) <= tol)
+    return sum(flush) >= 3
 
 
 def _same_outline(outer: Node, inner: Node, margin=10) -> bool:
@@ -532,6 +577,9 @@ def find_icons(clean: np.ndarray, words: list[Word], shapes: list[Node], conns, 
         cx, cy = x + w / 2, y + h / 2
         if any(wd.x <= cx <= wd.x2 and wd.y <= cy <= wd.y2 for wd in words):
             continue  # leftover text pixels
+        if any(abs(wd.cy - cy) < 0.5 * wd.h and (0 <= x - wd.x2 < 0.35 * wd.h or 0 <= wd.x - (x + w) < 0.35 * wd.h)
+               for wd in words):
+            continue  # letters OCR didn't read, butting against the words it did
         icons.append(Node("icon", int(x), int(y), int(w), int(h)))
     return icons
 
@@ -546,7 +594,12 @@ def misread_icons(words: list[Word], shapes: list[Node]) -> tuple[list[Word], li
             label_right = any(
                 o is not w and len(o.text) >= 3 and o.score >= 0.6 and abs(o.cy - w.cy) < 0.4 * max(o.h, w.h)
                 and -0.5 * w.h <= o.x - w.x2 < 2 * w.h for o in words)
-            if label_right and not sole_label:
+            # an icon starts its line; a short read with a word right before it is
+            # just part of a sentence OCR split up ("Upgrade" "to" "ode 22")
+            word_left = any(
+                o is not w and abs(o.cy - w.cy) < 0.4 * max(o.h, w.h) and 0 <= w.x - o.x2 < 1.0 * w.h
+                for o in words)
+            if label_right and not sole_label and not word_left:
                 icons.append(Node("icon", w.x, w.y, w.w, w.h))
                 continue
         keep.append(w)
@@ -748,6 +801,29 @@ def _border_point(n: Node, dx: float, dy: float) -> tuple[float, float]:
     return cx + dx * t, cy + dy * t
 
 
+def _continues_past(ink: np.ndarray, a: Node, b: Node, p, q, span=14) -> bool:
+    """Does the line p->q carry on straight through the far side of BOTH
+    shapes? Then it's a divider or border running past them, not a connector
+    (connectors end at their shapes)."""
+    H, W = ink.shape
+    L = math.hypot(q[0] - p[0], q[1] - p[1]) or 1
+    ux, uy = (q[0] - p[0]) / L, (q[1] - p[1]) / L
+
+    def inked(x, y, sign, t0, t1) -> float:
+        ts = range(int(t0), int(t1))
+        hits = sum(1 for t in ts if 0 <= int(x + sign * ux * t) < W and 0 <= int(y + sign * uy * t) < H
+                   and ink[int(y + sign * uy * t), int(x + sign * ux * t)])
+        return hits / max(len(ts), 1)
+
+    def beyond(n: Node, x, y, sign) -> bool:
+        # a divider runs THROUGH the shape and out the far side; a chain of
+        # arrows stops at each shape's border (its inside is empty)
+        reach = abs(ux) * n.w + abs(uy) * n.h
+        return inked(x, y, sign, 3, reach - 3) >= 0.7 and inked(x, y, sign, reach + 6, reach + 6 + span) >= 0.7
+
+    return beyond(a, p[0], p[1], -1) and beyond(b, q[0], q[1], +1)
+
+
 def find_connectors(img: np.ndarray, clean: np.ndarray, shapes: list[Node], words: list[Word]):
     H, W = img.shape[:2]
     raw_ink = _ink(img)
@@ -806,6 +882,8 @@ def find_connectors(img: np.ndarray, clean: np.ndarray, shapes: list[Node], word
             vis = ~text_mask[ys, xs]
             if vis.sum() < 4 or (line_ink[ys, xs][vis] > 0).mean() < 0.85:
                 continue
+            if _continues_past(line_ink, a, b, p, q):
+                continue  # part of a longer divider/border running through both shapes
             # only now (rarely reached) check the path doesn't run through a third shape
             others = [n for n in shapes if n is not a and n is not b and not n.contains(a) and not n.contains(b)]
             if any(_inside_any(x, y, others, shrink=8) for x, y in zip(xs[::4], ys[::4])):
@@ -864,6 +942,8 @@ def find_connectors(img: np.ndarray, clean: np.ndarray, shapes: list[Node], word
         if s.length < 20 or along_direct(s) or not isolated(s) or not inked(s):
             continue
         a, b = attach(s.x0, s.y0), attach(s.x1, s.y1)
+        if a and b and _continues_past(line_ink, a, b, (s.x0, s.y0), (s.x1, s.y1)):
+            continue
         if a and b and a is not b and not a.contains(b) and not b.contains(a):
             add(a, b, s, "hough")
 
@@ -877,8 +957,19 @@ def guess_label_edges(root: Node, regions: list[Node], shapes: list[Node], conns
     """Text sitting in the gap between two boxes, covering most of it, is almost
     always a label on an arrow we couldn't see (hidden under the label). Emit
     it as an edge flagged [guess] instead of leaving it as loose text."""
+    def labelled(s: Node) -> bool:
+        """A node: exactly one piece of text inside, roughly centred."""
+        inside = [w for w in root_words_all if s.contains(w, 2)]
+        if len(inside) != 1:
+            return False
+        w = inside[0]
+        return abs(w.cx - (s.x + s.w / 2)) < 0.2 * s.w and abs(w.cy - (s.y + s.h / 2)) < 0.25 * s.h
+
+    root_words_all = [w for n in [root] + regions + shapes for w in n.words]
+    # only diagram-like nodes: leaf boxes that have their own text (UI chrome
+    # with a caption between two plain boxes is not an arrow label)
     leaves = [s for s in shapes if s.kind in ("rect", "ellipse", "diamond")
-              and not any(o is not s and s.contains(o, 0) for o in shapes)]
+              and not any(o is not s and s.contains(o, 0) for o in shapes) and labelled(s)]
     linked = {frozenset((id(a), id(b))) for a, b, *_ in conns}
     owners = [root] + regions + [s for s in shapes if not any(s is l for l in leaves)]
     out = []
@@ -1206,6 +1297,17 @@ def convert(img: np.ndarray, raw_words: list[Word] | None = None) -> Result:
     shapes = [s for s in shapes if id(s) not in glyph_bits]
     conns = [c for c in conns if id(c[0]) not in glyph_bits and id(c[1]) not in glyph_bits]
     lap("glyphs")
+    # a small shape lying mostly on top of a word (without containing it) is an
+    # outline left behind by erasing that word's letters, not a real shape
+    def on_text(sh: Node) -> bool:
+        for w in words:
+            ix = max(0, min(sh.x2, w.x2) - max(sh.x, w.x))
+            iy = max(0, min(sh.y2, w.y2) - max(sh.y, w.y))
+            if ix * iy > 0.4 * sh.area and not sh.contains(w, 2):
+                return True
+        return False
+    shapes = [sh for sh in shapes if sh.connected or max(sh.w, sh.h) > 3 * med_h or not on_text(sh)]
+
     # small textless circles/squares (avatars, emoji, buttons) are icons themselves
     for sh in shapes:
         small = max(sh.w, sh.h) <= 3 * med_h

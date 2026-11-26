@@ -52,20 +52,125 @@ def _union(a, b):
     return (x, y, max(a[0] + a[2], b[0] + b[2]) - x, max(a[1] + a[3], b[1] + b[3]) - y)
 
 
+def _changed_columns(d: np.ndarray, min_w=150, gap=24):
+    """Boxes of vertical bands that changed: x-runs where a column of the change
+    mask has enough set pixels, each with the y-extent of its changes."""
+    H = d.shape[0]
+    cols = d.sum(axis=0) > 0.01 * H
+    xs = np.flatnonzero(cols)
+    if not len(xs):
+        return []
+    runs, start, prev = [], xs[0], xs[0]
+    for x in xs[1:]:
+        if x > prev + gap:
+            runs.append((start, prev))
+            start = x
+        prev = x
+    runs.append((start, prev))
+    boxes = []
+    for x0, x1 in runs:
+        if x1 - x0 < min_w:
+            continue
+        rows = np.flatnonzero(d[:, x0:x1 + 1].any(axis=1))
+        boxes.append((int(x0), int(rows[0]), int(x1 - x0 + 1), int(rows[-1] - rows[0] + 1)))
+    return boxes
+
+
+def vertical_shift(a: np.ndarray, b: np.ndarray, box, max_frac=0.6) -> int | None:
+    """How far the content of `box` scrolled vertically from gray frame a to b.
+
+    Row-brightness profiles give candidate shifts cheaply; the best one is
+    verified pixel by pixel. Returns None if it isn't a clean scroll."""
+    x, y, w, h = box
+    pa = a[y:y + h, x:x + w].astype(np.float32).mean(axis=1)
+    pb = b[y:y + h, x:x + w].astype(np.float32).mean(axis=1)
+    best, best_err = None, np.inf
+    for dy in range(-int(h * max_frac), int(h * max_frac) + 1):
+        if dy == 0:
+            continue
+        if dy > 0:  # content moved down by dy
+            ea, eb = pa[:h - dy], pb[dy:]
+        else:
+            ea, eb = pa[-dy:], pb[:h + dy]
+        if len(ea) < 0.3 * h:
+            continue
+        err = float(np.abs(ea - eb).mean())
+        if err < best_err:
+            best, best_err = dy, err
+    if best is None:
+        return None
+    dy = best
+    A = a[y:y + h, x:x + w]
+    B = b[y:y + h, x:x + w]
+    ov_a, ov_b = (A[:h - dy], B[dy:]) if dy > 0 else (A[-dy:], B[:h + dy])
+    residual = float((cv2.absdiff(ov_a, ov_b) > 40).mean())
+    still = float((cv2.absdiff(A, B) > 40).mean())
+    return dy if residual < 0.25 * still and residual < 0.03 else None
+
+
 @dataclass
 class IncrementalOCR:
-    """Keeps the last frame's OCR; re-reads only regions that changed."""
-    full_ratio: float = 0.35  # above this much change, just OCR everything
+    """Keeps the last frame's OCR; re-reads only regions that changed.
+
+    Scrolling is recognised: a region whose content shifted vertically keeps
+    its words (moved by the shift) and only the newly revealed strip is read."""
+    full_ratio: float = 0.35  # above this much (non-scroll) change, just OCR everything
     prev: np.ndarray | None = None
     words: list[Word] = field(default_factory=list)
+    scrolls: list = field(default_factory=list)  # [(box, dy)] found on the last frame
+
+    def _changed(self, a_gray, b_gray):
+        d = cv2.absdiff(a_gray, b_gray) > 40
+        d = cv2.morphologyEx(d.astype(np.uint8), cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))  # compression specks
+        return cv2.dilate(d, np.ones((9, 9), np.uint8))
 
     def __call__(self, img: np.ndarray) -> tuple[list[Word], str]:
         H, W = img.shape[:2]
+        self.scrolls = []
         if self.prev is None:
             return self._full(img)
-        d = (cv2.absdiff(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cv2.cvtColor(self.prev, cv2.COLOR_BGR2GRAY)) > 40)
-        d = cv2.morphologyEx(d.astype(np.uint8), cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))  # drop compression specks
-        d = cv2.dilate(d.astype(np.uint8), np.ones((9, 9), np.uint8))
+        cur = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        prev = cv2.cvtColor(self.prev, cv2.COLOR_BGR2GRAY)
+        d = self._changed(prev, cur)
+        words = list(self.words)
+
+        # 1. scrolled regions: shift the old frame and the old words to match.
+        #    Candidates are changed vertical bands (layout columns): the changed
+        #    pixels of a scrolling feed are fragmented by the gaps between posts.
+        virtuals = [prev.copy() for _ in range(3)]  # shift-1, shift, shift+1
+        for x, y, w, h in _changed_columns(d):
+            if w * h < 0.04 * W * H or h < 120:
+                continue
+            dy = vertical_shift(prev, cur, (x, y, w, h))
+            if dy is None:
+                continue
+            self.scrolls.append(((x, y, w, h), dy))
+            region = prev[y:y + h, x:x + w]
+            for v, s in zip(virtuals, (dy - 1, dy, dy + 1)):
+                shifted = np.zeros_like(region)  # the newly revealed strip stays "changed"
+                if s > 0:
+                    shifted[s:] = region[:h - s]
+                elif s < 0:
+                    shifted[:h + s] = region[-s:]
+                else:
+                    shifted[:] = region
+                v[y:y + h, x:x + w] = shifted
+            moved = []
+            for wd in words:
+                if x <= wd.cx <= x + w and y <= wd.cy <= y + h:
+                    ny = wd.y + dy
+                    if y <= ny and ny + wd.h <= y + h:
+                        moved.append(Word(wd.text, wd.x, ny, wd.w, wd.h, wd.score, wd.bold))
+                else:
+                    moved.append(wd)
+            words = moved
+        if self.scrolls:
+            # best of the three alignments per pixel: tolerates sub-pixel scroll
+            # and compression noise on moved text edges
+            best = np.minimum.reduce([cv2.absdiff(v, cur) for v in virtuals])
+            r = cv2.morphologyEx((best > 60).astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+            d = cv2.dilate(r, np.ones((9, 9), np.uint8))
+
         if d.mean() > self.full_ratio:
             return self._full(img)
         n, _, stats, _ = cv2.connectedComponentsWithStats(d)
@@ -75,16 +180,17 @@ class IncrementalOCR:
             if area < 150:
                 continue
             regions.append((max(x - pad, 0), max(y - pad, 0), min(w + 2 * pad, W - x + pad), min(h + 2 * pad, H - y + pad)))
+        tag = "scroll " if self.scrolls else ""
         if not regions:
-            self.prev = img
-            return self.words, "reuse"
+            self.prev, self.words = img, words
+            return self.words, tag + "reuse"
         # grow regions to swallow any old word they touch, then merge overlaps
         changed = True
         while changed:
             changed = False
             for i, r in enumerate(regions):
-                for w in self.words:
-                    wb = (w.x, w.y, w.w, w.h)
+                for wd in words:
+                    wb = (wd.x, wd.y, wd.w, wd.h)
                     if _overlaps(r, wb) and _union(r, wb) != r:
                         regions[i] = r = _union(r, wb)
                         changed = True
@@ -92,13 +198,13 @@ class IncrementalOCR:
                     if _overlaps(r, regions[j]):
                         regions[i] = r = _union(r, regions.pop(j))
                         changed = True
-        keep = [w for w in self.words if not any(_overlaps(r, (w.x, w.y, w.w, w.h)) for r in regions)]
+        keep = [wd for wd in words if not any(_overlaps(r, (wd.x, wd.y, wd.w, wd.h)) for r in regions)]
         new = []
         for x, y, w, h in regions:
             if w >= 16 and h >= 16:
                 new += run_ocr(img[y:y + h, x:x + w], x, y, crop=True)
         self.prev, self.words = img, keep + new
-        return self.words, f"partial x{len(regions)}"
+        return self.words, f"{tag}partial x{len(regions)}"
 
     def _full(self, img):
         self.prev, self.words = img, run_ocr(img)
@@ -148,6 +254,7 @@ def run(video: Path, interval: float, out: Path, gate: float, width: int, confir
 
     last_frame: np.ndarray | None = None
     committed: Board | None = None  # the state already announced to consumers
+    unsettled = 0  # consecutive changed steps that didn't hold (scrolling, playing video)
     events: list[str] = []
     steps = []
     t = 0.0
@@ -179,8 +286,9 @@ def run(video: Path, interval: float, out: Path, gate: float, width: int, confir
                     last_frame = later
                     step["confirm"] = info2
                     after = diff(committed, board2)
+                    settle = diff(board, board2)
                     if now is None or after is None:  # big change
-                        if after is None and diff(board, board2) is not None and len(diff(board, board2)) <= 2:
+                        if after is None and settle is not None and len(settle) <= 2:
                             events.append(f"{stamp(t)} KEY\n{text2}")
                             committed, step["action"] = board2, "KEY"
                         else:
@@ -194,6 +302,18 @@ def run(video: Path, interval: float, out: Path, gate: float, width: int, confir
                                 board if set(now) == set(held) else board2)
                         else:
                             step["action"] = "glitch"  # didn't hold: cursor, animation
+                    # A screen that keeps changing (scrolling, a playing video) never
+                    # holds still: after two unsettled steps, announce what's there now.
+                    unsettled = unsettled + 1 if step["action"] in ("unsettled", "glitch") else 0
+                    if unsettled >= 2:
+                        latest = diff(committed, board2)
+                        if latest is None:
+                            events.append(f"{stamp(t)} KEY\n{text2}")
+                            step["action"] = "KEY (moving)"
+                        elif latest:
+                            events.append(f"{stamp(t)} Δ\n" + "\n".join(latest) + "\n")
+                            step["action"] = f"Δ {len(latest)} (moving)"
+                        committed, unsettled = board2, 0
             (out / "state.board").write_text(serialize(committed))
         steps.append(step)
         if verbose:
