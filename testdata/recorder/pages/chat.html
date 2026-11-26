@@ -1,0 +1,41 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>#platform-team</title>
+<style>
+  body { margin:0; font-family:"Liberation Sans", Arial, sans-serif; display:grid; grid-template-columns:240px 1fr; height:100vh; background:#fff; color:#1d1c1d; }
+  .nav { background:#3f0e40; color:#cfc3cf; padding:12px 0; } .nav b { color:#fff; display:block; padding:4px 16px 14px; font-size:17px; }
+  .nav div { padding:4px 16px; font-size:15px; } .nav .on { background:#1164a3; color:#fff; } .nav .h { margin-top:14px; font-size:13px; }
+  .main { display:flex; flex-direction:column; } .top { padding:12px 20px; border-bottom:1px solid #ddd; font-weight:700; font-size:17px; }
+  .msgs { flex:1; padding:10px 20px; overflow:hidden; display:flex; flex-direction:column; justify-content:flex-end; }
+  .m { display:flex; gap:10px; margin:10px 0; } .av { width:36px; height:36px; border-radius:6px; flex:none; }
+  .who { font-weight:700; font-size:15px; } .when { color:#616061; font-size:12px; font-weight:400; margin-left:6px; } .txt { font-size:15px; margin-top:2px; }
+  code { background:#f6f6f6; border:1px solid #ddd; padding:1px 4px; border-radius:3px; color:#e01e5a; }
+  .typing { color:#616061; font-size:13px; padding:0 20px 4px; height:18px; }
+  .box { margin:0 20px 18px; border:1px solid #bbb; border-radius:8px; padding:12px; color:#888; font-size:15px; }
+</style></head>
+<body>
+<div class="nav"><b>Acme Inc</b><div class="h">Channels</div><div># general</div><div class="on"># platform-team</div><div># incidents</div><div># random</div><div class="h">Direct messages</div><div>Priya Natarajan</div><div>Marcus Webb</div></div>
+<div class="main"><div class="top"># platform-team</div><div class="msgs" id="msgs"></div><div class="typing" id="typing"></div><div class="box" id="box">Message #platform-team</div></div>
+<script>
+  const people = { Priya: "#e8912d", Marcus: "#2bac76", Dana: "#4a154b", You: "#1264a3" };
+  const script = [
+    ["Priya", "10:02 AM", "Deploy of api-gateway v2.14 is going out now"],
+    ["Marcus", "10:03 AM", "Watching the error rate dashboard"],
+    ["Priya", "10:05 AM", "Canary at 10%, looks clean so far"],
+    ["Dana", "10:07 AM", "Seeing <code>ECONNREFUSED</code> from billing workers, related?"],
+    ["Marcus", "10:08 AM", "Probably the Postgres failover, checking"],
+    ["Priya", "10:10 AM", "Pausing the rollout until we know"],
+  ];
+  const box = document.getElementById("msgs");
+  function add([who, when, txt]) {
+    box.insertAdjacentHTML("beforeend", `<div class="m"><div class="av" style="background:${people[who]}"></div><div><div class="who">${who}<span class="when">${when}</span></div><div class="txt">${txt}</div></div></div>`);
+  }
+  add(script[0]); add(script[1]);
+  let i = 2;
+  setInterval(() => {
+    if (i >= script.length) return;
+    document.getElementById("typing").textContent = `${script[i][0]} is typing...`;
+    setTimeout(() => { document.getElementById("typing").textContent = ""; add(script[i++]); }, 1200);
+  }, 3000);
+  window.sendMessage = (t) => add(["You", "10:11 AM", t]);
+</script>
+</body></html>

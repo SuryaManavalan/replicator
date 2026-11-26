@@ -1,0 +1,37 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Diagram — checkout flow</title>
+<style>
+  body { margin:0; font-family:"Ubuntu", "DejaVu Sans", sans-serif; background:#fff; }
+  .tb { display:flex; gap:8px; padding:8px 12px; border-bottom:1px solid #e5e5e5; align-items:center; } .tb div { border:1px solid #ccc; border-radius:6px; padding:4px 10px; font-size:13px; }
+  .tb .t { border:0; font-weight:700; font-size:15px; margin-right:12px; }
+  svg { width:100vw; height:calc(100vh - 44px); background-image: radial-gradient(#ddd 1px, transparent 1px); background-size:20px 20px; }
+  .node rect, .node ellipse, .node polygon { stroke:#334155; stroke-width:2; } text { font-size:15px; fill:#0f172a; text-anchor:middle; dominant-baseline:middle; }
+  .edge { stroke:#334155; stroke-width:2; fill:none; marker-end:url(#a); } .lab { font-size:13px; fill:#475569; }
+</style></head>
+<body>
+<div class="tb"><div class="t">checkout-flow.diagram</div><div>Select</div><div>Rectangle</div><div>Ellipse</div><div>Arrow</div><div>Text</div></div>
+<svg id="s"><defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#334155"/></marker></defs><g id="edges"></g><g id="nodes"></g></svg>
+<script>
+  const N = {}, E = [];
+  const fills = { cart: "#dbeafe", auth: "#fef3c7", pay: "#dcfce7", fail: "#fee2e2", done: "#e9d5ff", inv: "#f1f5f9" };
+  function node(id, kind, x, y, label) { N[id] = { id, kind, x, y, label }; draw(); }
+  function edge(a, b, label) { E.push([a, b, label]); draw(); }
+  function moveNode(id, x, y) { N[id].x = x; N[id].y = y; draw(); }
+  function draw() {
+    const g = document.getElementById("nodes"), eg = document.getElementById("edges");
+    g.innerHTML = Object.values(N).map((n) => {
+      const f = fills[n.id] || "#fff";
+      const shape = n.kind === "diamond" ? `<polygon points="${n.x},${n.y - 50} ${n.x + 80},${n.y} ${n.x},${n.y + 50} ${n.x - 80},${n.y}" fill="${f}"/>`
+        : n.kind === "ellipse" ? `<ellipse cx="${n.x}" cy="${n.y}" rx="80" ry="36" fill="${f}"/>` : `<rect x="${n.x - 80}" y="${n.y - 32}" width="160" height="64" rx="8" fill="${f}"/>`;
+      return `<g class="node">${shape}<text x="${n.x}" y="${n.y}">${n.label}</text></g>`;
+    }).join("");
+    eg.innerHTML = E.map(([a, b, l]) => {
+      const A = N[a], B = N[b]; const dx = B.x - A.x, dy = B.y - A.y, d = Math.hypot(dx, dy);
+      const k1 = Math.abs(dx) > Math.abs(dy) ? 82 / Math.abs(dx) * d : 52 / Math.abs(dy) * d;
+      const x1 = A.x + dx / d * Math.min(k1, d / 2.2), y1 = A.y + dy / d * Math.min(k1, d / 2.2), x2 = B.x - dx / d * Math.min(k1, d / 2.2), y2 = B.y - dy / d * Math.min(k1, d / 2.2);
+      return `<path class="edge" d="M${x1},${y1} L${x2},${y2}"/>` + (l ? `<rect x="${(x1 + x2) / 2 - 22}" y="${(y1 + y2) / 2 - 11}" width="44" height="22" fill="#fff"/><text class="lab" x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2}">${l}</text>` : "");
+    }).join("");
+  }
+  window.diagram = { node, edge, moveNode };
+</script>
+</body></html>

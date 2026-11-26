@@ -1,0 +1,39 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Budget 2027 - Sheet</title>
+<style>
+  body { margin:0; font-family:"DejaVu Sans", Arial, sans-serif; font-size:13px; color:#202124; }
+  .bar { padding:10px 14px; border-bottom:1px solid #dadce0; display:flex; gap:20px; align-items:center; } .bar b { font-size:18px; }
+  .bar span { color:#5f6368; } .fx { padding:6px 14px; border-bottom:1px solid #dadce0; color:#5f6368; } .fx b { color:#202124; margin-left:10px; font-weight:400; }
+  table { border-collapse:collapse; } td, th { border:1px solid #e2e3e3; padding:4px 8px; height:20px; }
+  th { background:#f8f9fa; color:#5f6368; font-weight:400; min-width:110px; cursor:pointer; } th.rn { min-width:34px; }
+  td.num { text-align:right; } td.sel { outline:2px solid #1a73e8; outline-offset:-2px; } tr.h td { font-weight:700; background:#e8f0fe; }
+  .tabs { position:fixed; bottom:0; left:0; right:0; background:#f8f9fa; border-top:1px solid #dadce0; padding:6px 14px; } .tabs span { padding:4px 12px; margin-right:6px; } .tabs .on { background:#fff; color:#1a73e8; border-bottom:2px solid #1a73e8; }
+</style></head>
+<body>
+<div class="bar"><b>Budget 2027</b><span>File</span><span>Edit</span><span>View</span><span>Insert</span><span>Format</span><span>Data</span></div>
+<div class="fx">fx<b id="fx">Team</b></div>
+<table id="t"></table>
+<div class="tabs"><span class="on">Summary</span><span>Engineering</span><span>Marketing</span><span>Assumptions</span></div>
+<script>
+  const cols = ["A", "B", "C", "D", "E", "F"];
+  let rows = [
+    ["Team", "Headcount", "Salaries", "Tools", "Travel", "Total"],
+    ["Engineering", 42, 6720000, 310000, 85000, 0],
+    ["Design", 8, 1040000, 64000, 22000, 0],
+    ["Marketing", 12, 1260000, 410000, 140000, 0],
+    ["Sales", 18, 2160000, 120000, 260000, 0],
+    ["Support", 10, 780000, 52000, 18000, 0],
+  ];
+  const fmt = (v) => typeof v === "number" && v > 1000 ? "$" + v.toLocaleString() : v;
+  function render(sel) {
+    rows.slice(1).forEach((r) => r[5] = r[2] + r[3] + r[4]);
+    let h = "<tr><th class='rn'></th>" + cols.map((c, i) => `<th data-c="${i}">${c}</th>`).join("") + "</tr>";
+    rows.forEach((r, i) => h += `<tr class="${i ? "" : "h"}"><th class="rn">${i + 1}</th>` + r.map((v, j) => `<td class="${typeof v === "number" ? "num" : ""} ${sel && sel[0] === i && sel[1] === j ? "sel" : ""}">${fmt(v)}</td>`).join("") + "</tr>");
+    document.getElementById("t").innerHTML = h;
+  }
+  render();
+  window.edit = (r, c, v) => { rows[r][c] = v; render([r, c]); document.getElementById("fx").textContent = fmt(v); };
+  window.select = (r, c) => { render([r, c]); document.getElementById("fx").textContent = fmt(rows[r][c]); };
+  window.sortBy = (c) => { const [h, ...b] = rows; b.sort((x, y) => y[c] - x[c]); rows = [h, ...b]; render(); };
+</script>
+</body></html>

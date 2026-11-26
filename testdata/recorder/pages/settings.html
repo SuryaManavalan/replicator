@@ -1,0 +1,46 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Settings</title>
+<style>
+  body { margin:0; font-family:"Liberation Sans", Arial, sans-serif; background:#f3f4f6; color:#111827; }
+  .top { background:#fff; padding:14px 32px; border-bottom:1px solid #e5e7eb; font-size:20px; font-weight:700; }
+  .tabs { display:flex; gap:28px; padding:0 32px; background:#fff; border-bottom:1px solid #e5e7eb; } .tabs div { padding:12px 0; color:#6b7280; cursor:pointer; } .tabs .on { color:#2563eb; border-bottom:2px solid #2563eb; }
+  .panel { max-width:760px; margin:24px 32px; background:#fff; border:1px solid #e5e7eb; border-radius:10px; }
+  .row { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; border-bottom:1px solid #f0f0f0; }
+  .row .t { font-weight:600; } .row .d { color:#6b7280; font-size:14px; margin-top:3px; }
+  .sw { width:44px; height:24px; border-radius:12px; background:#d1d5db; position:relative; cursor:pointer; } .sw::after { content:""; position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%; background:#fff; transition:.2s; }
+  .sw.on { background:#2563eb; } .sw.on::after { left:23px; }
+  .dd { border:1px solid #d1d5db; border-radius:6px; padding:7px 12px; min-width:140px; position:relative; cursor:pointer; background:#fff; }
+  .menu { position:absolute; top:38px; right:0; background:#fff; border:1px solid #e5e7eb; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.12); width:180px; display:none; z-index:5; } .menu div { padding:8px 12px; } .menu div:hover, .menu .hl { background:#eff6ff; }
+  .danger { color:#dc2626; border:1px solid #fca5a5; padding:7px 12px; border-radius:6px; }
+</style></head>
+<body>
+<div class="top">Workspace settings</div>
+<div class="tabs" id="tabs"><div class="on">General</div><div>Members</div><div>Notifications</div><div>Billing</div><div>Security</div></div>
+<div class="panel" id="panel"></div>
+<script>
+  const P = {
+    General: [["Workspace name", "Acme Inc", "text"], ["Default language", "Used for emails and exports", "dd:English (US)"], ["Show week numbers", "In calendar views", "sw:0"], ["Compact mode", "Denser tables and lists", "sw:1"], ["Delete workspace", "Permanently remove all data", "danger"]],
+    Notifications: [["Email digests", "A summary of activity, daily", "sw:1"], ["Mentions", "When someone @mentions you", "sw:1"], ["Deploy alerts", "Failed or rolled-back deploys", "sw:0"], ["Digest time", "When daily digests are sent", "dd:9:00 AM"]],
+    Security: [["Two-factor authentication", "Require 2FA for all members", "sw:0"], ["SSO", "Sign in with Okta or Google Workspace", "dd:Not configured"], ["Session length", "Sign members out after", "dd:30 days"]],
+  };
+  function show(name) {
+    document.querySelectorAll("#tabs div").forEach((t) => t.classList.toggle("on", t.textContent === name));
+    const rows = P[name] || [["Nothing here yet", "This section is coming soon", ""]];
+    document.getElementById("panel").innerHTML = rows.map(([t, d, c]) => {
+      let ctl = "";
+      if (c.startsWith("sw")) ctl = `<div class="sw ${c.endsWith("1") ? "on" : ""}"></div>`;
+      else if (c.startsWith("dd")) ctl = `<div class="dd">${c.slice(3)} ▾<div class="menu"><div>English (US)</div><div class="hl">English (UK)</div><div>Deutsch</div><div>Français</div><div>日本語</div></div></div>`;
+      else if (c === "danger") ctl = `<div class="danger">Delete</div>`;
+      else if (c === "text") ctl = `<div class="dd">Acme Inc</div>`;
+      return `<div class="row"><div><div class="t">${t}</div><div class="d">${d}</div></div>${ctl}</div>`;
+    }).join("");
+  }
+  show("General");
+  document.addEventListener("click", (e) => {
+    if (e.target.closest("#tabs div")) show(e.target.textContent);
+    const sw = e.target.closest(".sw"); if (sw) sw.classList.toggle("on");
+    const dd = e.target.closest(".dd"); document.querySelectorAll(".menu").forEach((m) => m.style.display = "none");
+    if (dd && dd.querySelector(".menu")) dd.querySelector(".menu").style.display = "block";
+  });
+</script>
+</body></html>

@@ -1,0 +1,46 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Create account</title>
+<style>
+  body { margin:0; font-family: Georgia, "DejaVu Serif", serif; background:#fafaf9; color:#292524; }
+  .wrap { max-width:520px; margin:40px auto; background:#fff; border:1px solid #e7e5e4; border-radius:10px; padding:28px 32px; }
+  h1 { margin:0 0 4px; font-size:26px; } p.sub { color:#78716c; margin:0 0 22px; }
+  label { display:block; font-size:14px; margin:14px 0 6px; font-family: "DejaVu Sans", sans-serif; }
+  input, select { width:100%; box-sizing:border-box; padding:10px 12px; border:1px solid #d6d3d1; border-radius:6px; font-size:15px; }
+  input.bad { border-color:#dc2626; } .err { color:#dc2626; font-size:13px; margin-top:4px; font-family:"DejaVu Sans",sans-serif; }
+  .row { display:flex; gap:12px; } .row > div { flex:1; }
+  button { margin-top:22px; width:100%; padding:12px; background:#1c1917; color:#fff; border:0; border-radius:6px; font-size:16px; }
+  .check { display:flex; gap:8px; align-items:center; margin-top:16px; font-size:14px; font-family:"DejaVu Sans",sans-serif; }
+  .check input { width:auto; }
+  .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; }
+  .modal { background:#fff; border-radius:10px; padding:24px 28px; width:380px; font-family:"DejaVu Sans",sans-serif; }
+  .modal h2 { margin:0 0 8px; font-size:20px; } .modal .btns { display:flex; gap:10px; justify-content:flex-end; margin-top:18px; }
+  .modal button { width:auto; margin:0; padding:8px 16px; } .modal .ghost { background:#fff; color:#1c1917; border:1px solid #d6d3d1; }
+</style></head>
+<body>
+<div class="wrap">
+  <h1>Create your account</h1><p class="sub">Start your 14-day free trial. No credit card required.</p>
+  <form id="f" novalidate>
+    <div class="row"><div><label>First name</label><input id="first"></div><div><label>Last name</label><input id="last"></div></div>
+    <label>Work email</label><input id="email"><div class="err" id="emailErr"></div>
+    <label>Password</label><input id="pw" type="password"><div class="err" id="pwErr"></div>
+    <label>Company size</label><select id="size"><option>1-10</option><option>11-50</option><option>51-200</option><option>200+</option></select>
+    <div class="check"><input type="checkbox" id="tos"> I agree to the Terms of Service</div>
+    <button id="go" type="submit">Create account</button>
+  </form>
+</div>
+<div class="modal-bg" id="m"><div class="modal"><h2>Confirm your email</h2>
+  <div>We sent a 6-digit code to <b id="mEmail"></b>. Enter it to finish setting up your workspace.</div>
+  <div class="btns"><button class="ghost">Resend code</button><button>Continue</button></div></div></div>
+<script>
+  let attempts = 0;
+  document.getElementById("f").addEventListener("submit", (e) => {
+    e.preventDefault(); attempts++;
+    const email = document.getElementById("email"), pw = document.getElementById("pw");
+    const okEmail = /@.+\./.test(email.value), okPw = pw.value.length >= 8;
+    email.classList.toggle("bad", !okEmail); pw.classList.toggle("bad", !okPw);
+    document.getElementById("emailErr").textContent = okEmail ? "" : "Enter a valid work email address";
+    document.getElementById("pwErr").textContent = okPw ? "" : "Password must be at least 8 characters";
+    if (okEmail && okPw) { document.getElementById("mEmail").textContent = email.value; document.getElementById("m").style.display = "flex"; }
+  });
+</script>
+</body></html>

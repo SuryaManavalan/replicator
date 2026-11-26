@@ -1,0 +1,55 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Team Board</title>
+<style>
+  body { margin:0; font-family: "Liberation Sans", Arial, sans-serif; background:#0079bf; color:#172b4d; }
+  h1 { color:#fff; font-size:20px; margin:0; padding:14px 18px; background:rgba(0,0,0,.15); }
+  .board { display:flex; gap:12px; padding:14px; align-items:flex-start; }
+  .col { background:#ebecf0; border-radius:8px; width:260px; padding:8px; }
+  .col h2 { font-size:15px; margin:4px 6px 10px; }
+  .card { background:#fff; border-radius:6px; padding:10px; margin:0 0 8px; box-shadow:0 1px 0 rgba(9,30,66,.25); font-size:14px; cursor:grab; user-select:none; }
+  .tag { display:inline-block; font-size:11px; padding:1px 6px; border-radius:4px; color:#fff; margin-bottom:6px; }
+  .feat { background:#61bd4f; } .bug { background:#eb5a46; } .chore { background:#c377e0; }
+  .add { color:#5e6c84; font-size:14px; padding:6px; }
+  .drag { position:fixed; pointer-events:none; transform:rotate(3deg); width:240px; z-index:10; }
+</style></head>
+<body>
+<h1>Team Board · Sprint 22</h1>
+<div class="board">
+  <div class="col" data-col><h2>Backlog</h2>
+    <div class="card"><span class="tag feat">feature</span><br>SSO with Okta</div>
+    <div class="card"><span class="tag chore">chore</span><br>Upgrade Postgres to 16</div>
+    <div class="card"><span class="tag bug">bug</span><br>CSV export drops unicode</div>
+    <div class="add">+ Add a card</div></div>
+  <div class="col" data-col><h2>Doing</h2>
+    <div class="card"><span class="tag feat">feature</span><br>Usage-based billing</div>
+    <div class="card"><span class="tag bug">bug</span><br>Flaky e2e login test</div>
+    <div class="add">+ Add a card</div></div>
+  <div class="col" data-col><h2>Review</h2>
+    <div class="card"><span class="tag feat">feature</span><br>Audit log viewer</div>
+    <div class="add">+ Add a card</div></div>
+  <div class="col" data-col><h2>Done</h2>
+    <div class="card"><span class="tag chore">chore</span><br>Rotate API keys</div>
+    <div class="card"><span class="tag feat">feature</span><br>Dark mode</div>
+    <div class="add">+ Add a card</div></div>
+</div>
+<script>
+  // pointer-driven drag and drop (works with synthetic mouse input)
+  let drag = null;
+  document.addEventListener("pointerdown", (e) => {
+    const card = e.target.closest(".card"); if (!card) return;
+    const r = card.getBoundingClientRect();
+    drag = { card, dx: e.clientX - r.left, dy: e.clientY - r.top, ghost: card.cloneNode(true) };
+    drag.ghost.classList.add("drag"); document.body.appendChild(drag.ghost);
+    card.style.opacity = .3; move(e);
+  });
+  function move(e) { if (!drag) return; drag.ghost.style.left = e.clientX - drag.dx + "px"; drag.ghost.style.top = e.clientY - drag.dy + "px"; }
+  document.addEventListener("pointermove", move);
+  document.addEventListener("pointerup", (e) => {
+    if (!drag) return;
+    const col = document.elementsFromPoint(e.clientX, e.clientY).find((el) => el.matches("[data-col]"));
+    drag.card.style.opacity = 1; drag.ghost.remove();
+    if (col) col.insertBefore(drag.card, col.querySelector(".add"));
+    drag = null;
+  });
+</script>
+</body></html>

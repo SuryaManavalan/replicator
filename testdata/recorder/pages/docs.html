@@ -1,0 +1,50 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Rate limiting — Acme API docs</title>
+<style>
+  body { margin:0; font-family:"DejaVu Serif", Georgia, serif; color:#24292f; background:#fff; }
+  .top { position:sticky; top:0; background:#fff; border-bottom:1px solid #d0d7de; padding:12px 28px; font-family:"DejaVu Sans",sans-serif; display:flex; gap:24px; z-index:2; } .top b { font-size:17px; } .top span { color:#57606a; }
+  .wrap { display:grid; grid-template-columns:240px 1fr 200px; gap:28px; padding:0 28px; }
+  .toc, .right { position:sticky; top:60px; align-self:start; font-family:"DejaVu Sans",sans-serif; font-size:14px; padding-top:20px; } .toc div, .right div { padding:5px 0; color:#57606a; } .toc .on { color:#0969da; font-weight:600; }
+  article { max-width:720px; padding:20px 0 60px; line-height:1.65; font-size:16px; } h1 { font-family:"DejaVu Sans",sans-serif; font-size:32px; } h2 { font-family:"DejaVu Sans",sans-serif; margin-top:36px; border-bottom:1px solid #d0d7de; padding-bottom:6px; }
+  pre { background:#f6f8fa; padding:14px 16px; border-radius:6px; font-size:14px; line-height:1.5; font-family:"DejaVu Sans Mono",monospace; overflow:hidden; }
+  .note { border-left:4px solid #0969da; background:#ddf4ff; padding:10px 14px; border-radius:4px; font-family:"DejaVu Sans",sans-serif; font-size:15px; } .warn { border-color:#bf8700; background:#fff8c5; }
+  table { border-collapse:collapse; font-family:"DejaVu Sans",sans-serif; font-size:14px; } td, th { border:1px solid #d0d7de; padding:6px 12px; } th { background:#f6f8fa; }
+</style></head>
+<body>
+<div class="top"><b>Acme API</b><span>Guides</span><span>Reference</span><span>Changelog</span><span>Status</span></div>
+<div class="wrap">
+  <div class="toc"><div>Getting started</div><div>Authentication</div><div>Pagination</div><div class="on">Rate limiting</div><div>Errors</div><div>Webhooks</div><div>SDKs</div></div>
+  <article>
+    <h1>Rate limiting</h1>
+    <p>The Acme API limits how many requests each API key can make. Limits protect the platform from bursts and keep latency predictable for everyone.</p>
+    <div class="note">Limits apply per API key, not per IP address. Rotating keys does not reset your quota.</div>
+    <h2>Default limits</h2>
+    <table><tr><th>Plan</th><th>Requests / minute</th><th>Burst</th></tr><tr><td>Free</td><td>60</td><td>10</td></tr><tr><td>Team</td><td>600</td><td>100</td></tr><tr><td>Enterprise</td><td>6,000</td><td>1,000</td></tr></table>
+    <h2>Response headers</h2>
+    <p>Every response includes headers describing your current quota:</p>
+    <pre>X-RateLimit-Limit: 600
+X-RateLimit-Remaining: 587
+X-RateLimit-Reset: 1764201600</pre>
+    <h2>Handling 429 responses</h2>
+    <p>When you exceed the limit the API returns <b>429 Too Many Requests</b>. Retry after the number of seconds in the <code>Retry-After</code> header, with exponential backoff and jitter.</p>
+    <pre>async function withRetry(fn, attempts = 5) {
+  for (let i = 0; i &lt; attempts; i++) {
+    const res = await fn();
+    if (res.status !== 429) return res;
+    const wait = Number(res.headers.get("Retry-After") ?? 2 ** i);
+    await sleep(wait * 1000 + Math.random() * 250);
+  }
+  throw new Error("rate limited");
+}</pre>
+    <div class="note warn">Do not retry in a tight loop. Keys that repeatedly ignore Retry-After are temporarily blocked.</div>
+    <h2>Requesting higher limits</h2>
+    <p>Enterprise customers can request higher limits from the dashboard under Settings → API. Include your expected peak requests per minute and a short description of the workload.</p>
+    <p>We usually respond within one business day. Temporary increases for launches and migrations are available on request.</p>
+    <h2>FAQ</h2>
+    <p><b>Do webhooks count toward my limit?</b> No. Outgoing webhook deliveries are not counted.</p>
+    <p><b>Are limits shared across environments?</b> No. Test and live keys have separate quotas.</p>
+    <p><b>What about batch endpoints?</b> Each batch request counts once, regardless of how many items it contains.</p>
+  </article>
+  <div class="right"><div><b>On this page</b></div><div>Default limits</div><div>Response headers</div><div>Handling 429 responses</div><div>Requesting higher limits</div><div>FAQ</div></div>
+</div>
+</body></html>

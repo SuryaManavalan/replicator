@@ -1,0 +1,56 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Meeting | Weekly platform sync</title>
+<style>
+  body { margin:0; background:#1f1f1f; color:#fff; font-family:"Ubuntu", "DejaVu Sans", sans-serif; height:100vh; display:grid; grid-template-rows:48px 1fr 64px; grid-template-columns:1fr 300px; }
+  .top { grid-column:1/3; display:flex; align-items:center; gap:16px; padding:0 16px; background:#292929; font-size:14px; } .top b { font-size:15px; } .rec { color:#f87171; }
+  .stage { padding:12px; display:grid; grid-template-columns: 1fr 220px; gap:10px; min-height:0; }
+  .share { background:#000; border-radius:8px; overflow:hidden; position:relative; }
+  .sl { position:absolute; inset:0; background:#fff; color:#111; padding:5% 7%; display:none; } .sl.on { display:block; }
+  .sl h2 { color:#1e3a8a; font-size:30px; margin:0 0 20px; } .sl li { font-size:20px; margin:12px 0; } .sl.title { background:linear-gradient(135deg,#1e3a8a,#7c3aed); color:#fff; }
+  .sl .big { font-size:44px; font-weight:700; color:#7c3aed; } .sl .grid { display:grid; grid-template-columns:1fr 1fr; gap:18px 40px; } .sl .lab { color:#555; }
+  .share .who { position:absolute; left:10px; bottom:10px; background:rgba(0,0,0,.6); padding:3px 8px; border-radius:4px; font-size:13px; }
+  .tiles { display:flex; flex-direction:column; gap:10px; } .tile { flex:1; border-radius:8px; position:relative; overflow:hidden; }
+  .tile canvas { width:100%; height:100%; display:block; } .tile .n { position:absolute; left:8px; bottom:6px; font-size:13px; background:rgba(0,0,0,.5); padding:2px 6px; border-radius:4px; }
+  .tile.talk { outline:3px solid #7c83fd; }
+  .side { grid-row:2/4; grid-column:2; background:#292929; display:flex; flex-direction:column; } .side h3 { margin:0; padding:14px 16px; font-size:15px; border-bottom:1px solid #3a3a3a; }
+  .chat { flex:1; padding:10px 16px; overflow:hidden; font-size:14px; } .chat .m { margin:10px 0; } .chat .w { color:#a5b4fc; font-weight:700; font-size:13px; }
+  .bar { grid-column:1; display:flex; justify-content:center; gap:14px; align-items:center; background:#292929; } .bar div { background:#3a3a3a; padding:9px 16px; border-radius:6px; font-size:13px; } .bar .leave { background:#c4314b; }
+</style></head>
+<body>
+<div class="top"><b>Weekly platform sync</b><span id="clock">12:04</span><span class="rec">● Recording</span><span style="margin-left:auto">5 participants</span></div>
+<div class="stage">
+  <div class="share">
+    <div class="sl title on"><h1 style="font-size:40px;margin-top:12%">Q3 Business Review</h1><div style="font-size:20px">Platform team · October 2026</div></div>
+    <div class="sl"><h2>Highlights</h2><ul><li>Revenue up 18% quarter over quarter</li><li>Launched usage-based billing to all plans</li><li>Churn down to 2.1% (from 2.9%)</li></ul></div>
+    <div class="sl"><h2>Key metrics</h2><div class="grid"><div><div class="big">$4.8M</div><div class="lab">ARR</div></div><div><div class="big">1,204</div><div class="lab">Paying customers</div></div><div><div class="big">97.9%</div><div class="lab">Gross retention</div></div><div><div class="big">41</div><div class="lab">NPS</div></div></div></div>
+    <div class="sl"><h2>Q4 priorities</h2><ol><li>Enterprise SSO and audit logs</li><li>EU data residency</li><li>Self-serve plan upgrades</li></ol></div>
+    <div class="who">Priya Natarajan is presenting</div></div>
+  <div class="tiles"><div class="tile talk"><canvas></canvas><div class="n">Priya Natarajan</div></div><div class="tile"><canvas></canvas><div class="n">Marcus Webb</div></div><div class="tile"><canvas></canvas><div class="n">Dana Kim</div></div><div class="tile"><canvas></canvas><div class="n">You</div></div></div>
+</div>
+<div class="side"><h3>Meeting chat</h3><div class="chat" id="chat"><div class="m"><div class="w">Marcus Webb</div>Can everyone see the deck?</div><div class="m"><div class="w">Dana Kim</div>Yes, looks good</div></div></div>
+<div class="bar"><div>Mic</div><div>Camera</div><div>Share</div><div>Reactions</div><div class="leave">Leave</div></div>
+<script>
+  // animated "video" tiles: moving blobs, never still (like real webcams)
+  const tiles = [...document.querySelectorAll(".tile canvas")];
+  const hues = [20, 140, 260, 330];
+  function frame(t) {
+    tiles.forEach((c, i) => {
+      const w = c.width = c.clientWidth, h = c.height = c.clientHeight, g = c.getContext("2d");
+      g.fillStyle = `hsl(${hues[i]},25%,22%)`; g.fillRect(0, 0, w, h);
+      const x = w / 2 + Math.sin(t / 900 + i) * 12, y = h * 0.55 + Math.cos(t / 700 + i) * 6;
+      g.fillStyle = `hsl(${hues[i]},35%,55%)`; g.beginPath(); g.arc(x, y - h * 0.12, h * 0.17, 0, 7); g.fill();
+      g.beginPath(); g.ellipse(x, y + h * 0.3, h * 0.3, h * 0.22, 0, 0, 7); g.fill();
+    });
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  const msgs = [["Priya Natarajan", "Next slide is the metrics"], ["Marcus Webb", "Churn number looks great"], ["Dana Kim", "Can we get the onboarding funnel as a doc?"], ["Priya Natarajan", "Sure, I'll share after the call"]];
+  let k = 0;
+  setInterval(() => { if (k < msgs.length) document.getElementById("chat").insertAdjacentHTML("beforeend", `<div class="m"><div class="w">${msgs[k][0]}</div>${msgs[k][1]}</div>`); k++; }, 3500);
+  let cur = 0;
+  window.nextSlide = () => {
+    const sl = [...document.querySelectorAll(".sl")]; cur = Math.min(cur + 1, sl.length - 1);
+    sl.forEach((x, i) => x.classList.toggle("on", i === cur));
+  };
+</script>
+</body></html>
