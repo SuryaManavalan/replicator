@@ -130,21 +130,32 @@ def code_lines(truth_code: list[dict], pred_code: list[dict], scale: float) -> t
     """Code lines exactly right (indentation included) / truth lines."""
     hit = tot = 0
     for t in truth_code:
-        if not t.get("fully_visible"):
-            continue
         lines = t["lines"]
+        if not t.get("fully_visible"):
+            # partly scrolled: keep the lines whose (estimated) row is on screen
+            x, y, w, h = t["box"]
+            lh = h / max(len(lines), 1)
+            vh = t.get("viewport_h", 10_000)
+            keep = [i for i in range(len(lines)) if y + i * lh >= 0 and y + (i + 1) * lh <= vh]
+            if len(keep) < 2:
+                continue
+            lines = [lines[i] for i in keep]
+            t = dict(t, box=[x, y + keep[0] * lh, w, (keep[-1] - keep[0] + 1) * lh])
         # editors that put line numbers inside the <pre>: strip them from the truth
         if all(re.match(rf"\s*{i + 1}(?!\d)", l) for i, l in enumerate(lines[:3])):
             lines = [re.sub(rf"^\s*{i + 1}", "", l, count=1) for i, l in enumerate(lines)]
         lines = [l.rstrip() for l in lines]
         tot += len(lines)
-        tb = [v * scale for v in t["box"]]
-        p = max(pred_code, key=lambda p: _iou(tb, p["box"]), default=None)
-        if p is None or _iou(tb, p["box"]) < 0.1:
+        # match by content, not position: while a page scrolls, the truth
+        # snapshot and the frame can be a fraction of a second apart
+        def shared(p):
+            return len(set(norm(l) for l in lines if l.strip()) & set(norm(l) for l in p["lines"] if l.strip()))
+        p = max(pred_code, key=shared, default=None)
+        if p is None or shared(p) == 0:
             continue
         pl = [l.rstrip() for l in p["lines"]]
         best = 0
-        for off in range(-2, 3):
+        for off in range(-len(pl), len(lines) + 1):
             best = max(best, sum(1 for i, l in enumerate(lines) if 0 <= i + off < len(pl) and pl[i + off] == l))
         hit += best
     return hit, tot
@@ -201,7 +212,7 @@ def score(name: str, interval: float, rerun: bool = True) -> dict:
         pt_, pc_ = board_blocks(out / "boards" / f"{s_['frame']:04d}.board")
         h, t_ = table_cells(snap.get("tables", []), pt_, scale)
         cells[0] += h; cells[1] += t_
-        h, t_ = code_lines(snap.get("code", []), pc_, scale)
+        h, t_ = code_lines([dict(c, viewport_h=meta["viewport"][1]) for c in snap.get("code", [])], pc_, scale)
         lines[0] += h; lines[1] += t_
     ms = [s["ms_total"] + s.get("confirm", {}).get("ms_total", 0) for s in steps]
     return {

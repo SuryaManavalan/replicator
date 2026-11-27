@@ -44,7 +44,8 @@ ellipse "Postgres" @960,300 200x110 [fill=green]
 | Group | `group [@X,Y WxH]` + indented children | An invisible layout column (e.g. left nav / feed / sidebar). Only structure: nothing is drawn. |
 | Icon run | `icons N [@X,Y WxH]` | A row of N icons (toolbars, action bars). |
 | Icon | `icon [@X,Y WxH]` | A small symbol. We can't tell *which* symbol without a vision model; position (e.g. just left of a label) carries the meaning. |
-| Table | `table [@X,Y WxH] cols X1,X2,… [size=N]` + indented rows `"a" \| "b" \| ""` | Text aligned in rows and columns. `cols` are the column x positions; rows are spaced evenly over the height; `size` is the font size. |
+| Table | `table [@X,Y WxH] cols X1,X2,… [grid] [header] [size=N]` + indented rows `"a" \| "b" \| ""` | Rows and columns of cells, exact. `cols` are the column x positions; rows are spaced evenly over the height. `[grid]` = drawn with rules (spreadsheet-style), `[header]` = first row is a header. In the live stream a changed cell names its row and column: `~ "$410,000" -> "$520,000" (row "Marketing", col "Tools")`. |
+| Code | `code [@X,Y WxH] [from N]` + indented quoted lines | A code block: exact lines, indentation kept (leading spaces inside the quotes). `from N` = the first line number when the editor shows a gutter. Detected from line-number gutters, or from several signals together (code characters/keywords, monospace, a tinted panel). |
 | Text | `"text" [@X,Y WxH] [style]` | Free text. Font size is implied by height ÷ lines. |
 | Edge | `A -> B [: "label"] [style]` | `->`, `<-`, `<->` arrows; `--` plain line. `A`/`B` are a quoted label or an `#id`. `[guess]` = inferred from a label sitting between two shapes (the line itself wasn't seen; direction unknown). |
 | Comment | `# ...` | Ignored. |

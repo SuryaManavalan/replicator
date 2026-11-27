@@ -1,0 +1,17 @@
+board 1000x625
+
+"Handling 429 responses" @78,47 319x30 [bold]
+"When you exceed the limit the API returns 429 Too Many Requests.\nCall a.insert(0, x) to retry first, or set retries = 5 in the client.\nWrap calls with withRetry() and back off exponentially:" @78,102 473x53
+code @78,234 500x169
+  "async function withRetry(fn, attempts = 5) {"
+  "  for (let i = 0; i < attempts; i++) {"
+  "    const res = await fn();"
+  "    if (res.status !== 429) return res;"
+  "    await sleep(2 ** i * 1000);"
+  "  }"
+  ""
+  "  throw new Error(\"rate limited\");"
+  "}"
+"Install the client first:" @78,438 150x17
+code @78,469 328x19
+  "$ npm install @acme/client"

@@ -269,6 +269,35 @@ def scene_plain_table() -> Board:
     return Board(1280, 800, [text("Recent incidents", 80, 80, 26, bold=True), t], [])
 
 
+DOCS_CODE = [
+    "async function withRetry(fn, attempts = 5) {",
+    "  for (let i = 0; i < attempts; i++) {",
+    "    const res = await fn();",
+    "    if (res.status !== 429) return res;",
+    "    await sleep(2 ** i * 1000);",
+    "  }",
+    "",
+    '  throw new Error("rate limited");',
+    "}",
+]
+
+
+def scene_docs_code() -> Board:
+    """Docs page: an unnumbered code block on a faint panel, a shell command,
+    and prose that mentions code (which must stay prose)."""
+    code = Code(100, 300, 640, 9 * 24, list(DOCS_CODE), start=None, style={"_theme": "panel", "_pitch": 24})
+    shell = Code(100, 600, 420, 24, ["$ npm install @acme/client"], start=None, style={"_theme": "panel", "_pitch": 24})
+    return Board(1280, 800, [
+        text("Handling 429 responses", 100, 60, 30, bold=True),
+        text("When you exceed the limit the API returns 429 Too Many Requests.\n"
+             "Call a.insert(0, x) to retry first, or set retries = 5 in the client.\n"
+             "Wrap calls with withRetry() and back off exponentially:", 100, 130, 18),
+        code,
+        text("Install the client first:", 100, 560, 18),
+        shell,
+    ], [])
+
+
 SCENES = {
     "01-flow": scene_flow,
     "02-architecture": scene_architecture,
@@ -278,6 +307,7 @@ SCENES = {
     "06-spreadsheet": scene_spreadsheet,
     "07-code": scene_code,
     "08-plain-table": scene_plain_table,
+    "09-docs-code": scene_docs_code,
 }
 
 
@@ -364,6 +394,13 @@ def draw_board(board: Board, scale=2) -> Image.Image:
         img.paste(Image.fromarray(arr.astype(np.uint8)), (int(n.x * S), int(n.y * S)))
 
     def draw(node):
+        if isinstance(node, Code) and node.style.get("_theme") == "panel":
+            pitch = node.style.get("_pitch", 24)
+            d.rectangle(P(node.x - 16, node.y - 12, node.x + node.w, node.y + node.h + 12), fill="#f6f8fa")
+            fm = font(15, scale=S, mono=True)
+            for i, ln in enumerate(node.lines):
+                d.text(P(node.x, node.y + i * pitch + pitch / 2), ln, font=fm, fill="#24292f", anchor="lm")
+            return
         if isinstance(node, Code):
             pitch = node.style.get("_pitch", 24)
             gut = 60

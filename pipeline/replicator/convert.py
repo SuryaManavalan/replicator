@@ -27,7 +27,8 @@ import cv2
 import numpy as np
 
 from .board import Board, Code, Edge, Shape, Table, Text, _gaps, _split, scale_board, serialize
-from .structure import find_aligned_tables, find_code_blocks, find_grid_tables, reread_code_lines, reread_empty_cells
+from .structure import (find_aligned_tables, find_code_blocks, find_grid_tables, find_plain_code, reread_code_lines,
+                        reread_empty_cells)
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / ".cache"
@@ -1321,7 +1322,11 @@ def convert(img: np.ndarray, raw_words: list[Word] | None = None) -> Result:
     # 2. code (line-number gutters) among what's left: a sheet's row numbers
     #    are inside its grid, not a code gutter.
     code_found = find_code_blocks([w for w in labels_ok if id(w) not in in_grid], med_h_raw)
-    reread_code_lines(img, code_found, _get_engine()._load_rec_model())
+    in_code = {id(w) for f in code_found for w in f.words}
+    # 3. code without a gutter: several signals together (see find_plain_code)
+    code_found += find_plain_code(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY),
+                                  [w for w in labels_ok if id(w) not in in_grid and id(w) not in in_code], med_h_raw)
+    reread_code_lines(img, code_found, _get_engine()._load_rec_model())  # numbered and plain
     protected = {(w.x, w.y) for f in code_found + grid_found for w in f.words}
     # icons misread as a glyph or two, whatever OCR's confidence
     _, guessed = misread_icons([g for g in glyphs if (g.x, g.y) not in protected], [])

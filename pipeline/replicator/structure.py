@@ -204,12 +204,37 @@ def reread_code_lines(img: np.ndarray, found: list[Found], rec) -> None:
                 jobs.append((f, i, x0, crop))
     if not jobs:
         return
+    # Indentation from where each line's ink starts: OCR boxes carry a few px of
+    # uneven padding, a lot when a character is ~7 px wide.
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    ink_x: dict = {}
+    for f in found:
+        if not isinstance(f.block, Code) or not f.line_boxes:
+            continue
+        for i, b in enumerate(f.line_boxes):
+            if b is None:
+                continue
+            x0, y0, x1, y1 = b
+            # never left of the block's own text start: a gutter or panel border is there
+            a = max(int(x0 - 2 * (f.indent_cw or 6)), int(f.indent_base - 0.5 * (f.indent_cw or 6)), 0)
+            region = gray[max(y0, 0):min(y1, H), a:min(x1, W)].astype(np.int16)
+            if region.size == 0:
+                continue
+            cols = (np.abs(region - np.median(region)) > 40).any(axis=0)
+            if cols.any():
+                ink_x[(id(f), i)] = a + int(np.argmax(cols))
+    base_ink = {}
+    for (fid, i), x in ink_x.items():
+        base_ink[fid] = min(base_ink.get(fid, x), x)
     out = rec(TextRecInput(img=[j[3] for j in jobs]))
     for (f, i, x0, _), txt, score in zip(jobs, out.txts, out.scores):
         txt = txt.strip()
         if not txt or score < 0.5:
             continue
-        indent = " " * max(0, round((x0 - f.indent_base) / f.indent_cw)) if f.indent_cw else ""
+        if (id(f), i) in ink_x and f.indent_cw:
+            indent = " " * max(0, round((ink_x[(id(f), i)] - base_ink[id(f)]) / f.indent_cw))
+        else:
+            indent = " " * max(0, round((x0 - f.indent_base) / f.indent_cw)) if f.indent_cw else ""
         old = f.block.lines[i].strip()
         if len(old) > len(txt) and txt.replace(" ", "") in old.replace(" ", ""):
             continue  # the re-read lost characters (very short lines): keep the first reading
@@ -582,3 +607,204 @@ def find_aligned_tables(words: list, med_h: float) -> tuple[list[Table], list]:
         else:
             i += 1
     return tables, [w for w in words if id(w) not in used]
+
+
+# ---------------------------------------------------------------- code without line numbers
+
+CODE_CHARS = re.compile(r"[{}()\[\];=<>\"'`/\\|&*+:]")  # not $ or #: prices, IDs
+KEYWORDS = re.compile(r"(?:^|\s)(?:def|class|return|import|from|const|let|var|function|async|await|if|elif|else|for|while|"
+                      r"try|except|catch|throw|raise|print|lambda|fn|pub|struct|impl|SELECT|FROM|WHERE|curl|npm|pip)(?=[\s(:{])"
+                      r"|=>|->|::|>>>|\$ |\+\+|==|!=|\)\s*[{:]\s*$")
+
+
+def _text_lines(words: list, med_h: float) -> list[list]:
+    """Words -> visual text lines (same row, no wide gap between them)."""
+    lines = []
+    for row in _group_rows(words, med_h):
+        row.sort(key=lambda w: w.x)
+        cur = [row[0]]
+        for w in row[1:]:
+            if w.x - (cur[-1].x + cur[-1].w) < 1.5 * min(w.h, med_h * 1.5):
+                cur.append(w)
+            else:
+                lines.append(cur)
+                cur = [w]
+        lines.append(cur)
+    return lines
+
+
+def _on_tint(gray: np.ndarray, box, page_bg: float) -> bool:
+    """Is the text's own background (around the glyphs) tinted relative to the
+    page? Works for every line of a panel, not just its edges."""
+    x0, y0, x1, y1 = box
+    patch = gray[max(y0, 0):y1, max(x0, 0):x1]
+    if patch.size == 0:
+        return False
+    return abs(float(np.median(patch)) - page_bg) >= 4
+
+
+def _panel(gray: np.ndarray, box, med_h: float) -> bool:
+    """Does the box sit on a background distinct from its surroundings (a
+    code block's tinted panel), even a faint one with no border?"""
+    x0, y0, x1, y1 = box
+    H, W = gray.shape
+    m = int(0.6 * med_h)
+    inner = gray[max(y0 - m // 2, 0):min(y1 + m // 2, H), max(x0 - m // 2, 0):min(x1 + m // 2, W)]
+    r = int(2 * med_h)
+    ring = np.concatenate([
+        gray[max(y0 - r, 0):max(y0 - m, 0), max(x0 - r, 0):min(x1 + r, W)].ravel(),
+        gray[min(y1 + m, H):min(y1 + r, H), max(x0 - r, 0):min(x1 + r, W)].ravel(),
+    ])
+    if inner.size == 0 or ring.size < 20:
+        return False
+    return abs(float(np.median(inner)) - float(np.median(ring))) >= 4
+
+
+WORDISH = re.compile(r"^[A-Za-z][a-z]*[,.:;!?]?$|^[a-z]+'[a-z]+$")
+
+
+def _prose(text: str) -> bool:
+    """A sentence: mostly plain words, not ending like a code statement. Code
+    lines are full of identifiers, operators and punctuation tokens; prose
+    that *mentions* code isn't."""
+    toks = text.split()
+    if len(toks) < 5 or re.search(r"[;{}]\s*$", text):  # wrapped prose often ends in , ) ]
+        return False
+    return sum(1 for t in toks if WORDISH.match(t)) / len(toks) >= 0.6
+
+
+def _codeish(text: str) -> bool:
+    t = text.strip()
+    if not t:
+        return False
+    chars = len(t.replace(" ", "")) or 1
+    return (len(CODE_CHARS.findall(t)) / chars >= 0.08 or bool(KEYWORDS.search(t))
+            or bool(re.fullmatch(r"[{}()\[\];,]+", t)))
+
+
+def find_plain_code(img_gray: np.ndarray, words: list, med_h: float) -> list[Found]:
+    """Code blocks with no line-number gutter. Each line is judged first
+    (prose? code-like? on a tinted panel?); blocks are runs of non-prose
+    lines that share a left edge, accepted when the signals agree."""
+    lines = _text_lines(words, med_h)
+    page_bg = float(np.median(img_gray[::4, ::4]))
+    info = []
+    for ln in lines:
+        x0 = ln[0].x
+        x1 = max(w.x + w.w for w in ln)
+        y0, y1 = min(w.y for w in ln), max(w.y + w.h for w in ln)
+        text = " ".join(w.text for w in ln)
+        info.append({"words": ln, "x0": x0, "x1": x1, "y0": y0, "y1": y1, "cy": (y0 + y1) / 2,
+                     "h": y1 - y0, "text": text, "prose": _prose(text), "code": _codeish(text),
+                     "panel": _on_tint(img_gray, (x0, y0, x1, y1), page_bg)})
+    info.sort(key=lambda d: d["cy"])
+    used = set()
+    found = []
+    for i, seed in enumerate(info):
+        if i in used or seed["prose"]:
+            continue
+        block = [i]
+        base = seed["x0"]
+        pitch = None
+        for j in range(i + 1, len(info)):
+            if j in used:
+                continue
+            c, last = info[j], info[block[-1]]
+            if c["x0"] < base - 0.4 * med_h or c["x0"] > base + 0.6 * max(info[k]["x1"] - base for k in block) + med_h:
+                continue  # a different column of text
+            if c["x1"] < base:
+                continue
+            dy = c["cy"] - last["cy"]
+            if c["prose"] or (c["panel"] != last["panel"] and not c["code"]):
+                break  # prose, or stepping off the code panel, ends the block
+            if pitch is None:
+                # line spacing from the first neighbour (OCR box heights vary too much to guess it)
+                if not 0.7 * last["h"] <= dy <= 2.0 * last["h"]:
+                    break
+                pitch = dy
+                block.append(j)
+                continue
+            if dy < 0.6 * pitch:
+                continue
+            k = round(dy / pitch)
+            if k > 3 or abs(dy - k * pitch) > 0.3 * pitch:  # up to two blank lines
+                break
+            block.append(j)
+        ls = [info[k] for k in block]
+        text = "\n".join(d["text"] for d in ls)
+        chars = sum(len(d["text"].replace(" ", "")) for d in ls) or 1
+        density = len(CODE_CHARS.findall(text)) / chars
+        keys = sum(1 for d in ls if KEYWORDS.search(d["text"]))
+        indented = sum(1 for d in ls if d["x0"] - base > 0.8 * med_h)
+        box = (min(d["x0"] for d in ls), min(d["y0"] for d in ls), max(d["x1"] for d in ls), max(d["y1"] for d in ls))
+        panel = sum(d["panel"] for d in ls) >= 0.6 * len(ls)
+        codeish = sum(d["code"] for d in ls) >= 0.5 * len(ls)
+        cw = float(np.median([sum(w.w for w in d["words"]) / max(sum(len(w.text) for w in d["words"]), 1) for d in ls]))
+        # Monospace: every character the same width, so a line's width per
+        # character is nearly constant across lines (spread < 3%); proportional
+        # fonts vary with the letters used (~4-12%).
+        per = [(d["x1"] - d["x0"]) / len(d["text"]) for d in ls if len(d["text"]) >= 8]
+        # needs 3+ lines; and varied lengths: identically formatted lines
+        # (dates, IDs) match in width whatever the font
+        lens = [len(d["text"]) for d in ls if len(d["text"]) >= 8]
+        wide = (len(per) >= 3 and float(np.std(per) / np.mean(per)) < 0.02
+                and float(np.std(lens) / np.mean(lens)) > 0.06)
+        if len(ls) == 1:
+            # a one-line snippet: on its panel, and an actual code keyword/pattern
+            # (punctuation alone is everywhere: times, IDs, URLs)
+            prompt = bool(re.match(r"\s*(\$|>>>|%|PS>|❯)\s", seed["text"]))  # a shell/REPL prompt
+            ok = panel and (prompt or (bool(KEYWORDS.search(seed["text"])) and density >= 0.08))
+        else:
+            votes = (density >= 0.08) + (keys >= max(1, 0.25 * len(ls))) + panel + (indented >= 1) + wide + codeish
+            strong = keys >= 1 or (sum(d["code"] for d in ls) >= 2 and density >= 0.1)
+            # monospaced text on a tinted panel is a code/pre block by convention,
+            # even with no code characters in it (HTTP headers, logs, output)
+            ok = (density >= 0.05 and votes >= 3 and strong and chars >= 20) or (panel and wide and chars >= 20)
+            ok = ok and (wide or len(per) < 2 or keys >= 1)  # proportional text needs a real keyword to be code
+        if not ok:
+            continue
+        # lines, with blank lines restored and indentation from position
+        out, boxes = [], []
+        for a, d in enumerate(ls):
+            if a:
+                gap = round((d["cy"] - ls[a - 1]["cy"]) / (pitch or 1.45 * d["h"]))
+                for _ in range(max(0, gap - 1)):
+                    out.append("")
+                    boxes.append(None)
+            ws = d["words"]
+            s_ = " " * max(0, round((d["x0"] - base) / cw)) + ws[0].text
+            for p_, q in zip(ws, ws[1:]):
+                s_ += " " * max(1, round((q.x - (p_.x + p_.w)) / cw)) + q.text
+            out.append(s_.rstrip())
+            boxes.append((d["x0"], d["y0"], d["x1"], d["y1"]))
+        all_words = [w for d in ls for w in d["words"]]
+        code = Code(box[0], box[1], box[2] - box[0], box[3] - box[1], out)
+        found.append(Found(code, all_words, box[0], box[1], box[2] - box[0], box[3] - box[1], boxes, cw, base))
+        used.update(block)
+    return _join_blocks(found, med_h)
+
+
+def _join_blocks(found: list[Found], med_h: float) -> list[Found]:
+    """Consecutive code blocks sharing a left edge, close together, are one
+    block that got split (a short output line broke the line-spacing chain)."""
+    found.sort(key=lambda f: (f.indent_base, f.y))
+    out: list[Found] = []
+    for f in sorted(found, key=lambda f: f.y):
+        prev = next((o for o in reversed(out) if abs(o.indent_base - f.indent_base) <= 0.6 * med_h), None)
+        if prev is not None:
+            pitch = prev.h / max(len(prev.block.lines), 1)
+            gap = f.y - (prev.y + prev.h)
+            if -0.3 * pitch <= gap <= 2.5 * pitch:
+                blanks = max(0, round(gap / pitch) - 0)
+                blanks = max(0, round((f.y - prev.y) / pitch) - len(prev.block.lines))
+                prev.block.lines += [""] * blanks + f.block.lines
+                prev.line_boxes = (prev.line_boxes or []) + [None] * blanks + (f.line_boxes or [])
+                prev.words += f.words
+                x0, y0 = min(prev.x, f.x), prev.y
+                x1, y1 = max(prev.x + prev.w, f.x + f.w), max(prev.y + prev.h, f.y + f.h)
+                prev.x, prev.w, prev.h = x0, x1 - x0, y1 - y0
+                b = prev.block
+                b.x, b.w, b.h = x0, x1 - x0, y1 - y0
+                continue
+        out.append(f)
+    return out
