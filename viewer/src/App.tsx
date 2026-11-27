@@ -138,8 +138,11 @@ export default function App() {
   }, [playing, video]);
 
   useEffect(() => {
-    if (frame) setText(frame.board);
-  }, [frame]);
+    if (!frame) return;
+    // refit the camera when the scene is replaced, or when scrubbing by hand
+    if (frame.action.includes("KEY") || !playing) fitNext.current = true;
+    setText(frame.board);
+  }, [frame]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pick = (i: number, v?: Version) => {
     const s = samples[i];

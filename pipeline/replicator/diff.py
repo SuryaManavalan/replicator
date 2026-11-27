@@ -215,8 +215,12 @@ def diff(old: Board, new: Board, key_ratio: float = 0.5) -> list[str] | None:
             dy = sorted(p[3] for p in c)[len(c) // 2]
             x0 = round(min(p[1].x for p in c))
             x1 = round(max(p[1].x + p[1].w for p in c))
-            what = "up" if dy < 0 else "down" if dy > 0 else ("left" if dx < 0 else "right")
-            lines.append(f"> scrolled {what} {round(abs(dy) or abs(dx))} ({len(c)} items, x {x0}-{x1})")
+            dx, dy = round(dx), round(dy)
+            if abs(dy) >= abs(dx):
+                what, amount = ("up" if dy < 0 else "down"), abs(dy)
+            else:
+                what, amount = ("left" if dx < 0 else "right"), abs(dx)
+            lines.append(f"> scrolled {what} {amount} ({len(c)} items, x {x0}-{x1})")
         else:
             lines += [f"> {e.ref if e.text else e.kind} @{round(e.x)},{round(e.y)}" for _, e, _, _ in c]
 

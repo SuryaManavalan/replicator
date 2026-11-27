@@ -278,9 +278,12 @@ def bridge_lines(img: np.ndarray, words: list[Word], pad=3, reach=24) -> np.ndar
             first = np.argmax(strip, axis=0)
             hit = strip.any(axis=0)
             ok = np.zeros(strip.shape[1], bool)
+            # Straight lines (solid or dashed) keep going in the same column;
+            # a diagonal border crosses any one column in just a few pixels.
+            n = strip.shape[0]
             for c in np.flatnonzero(hit):
                 k = first[c]
-                ok[c] = strip[k:k + 5, c].sum() >= 5
+                ok[c] = strip[k:, c].sum() >= max(7, 0.35 * (n - k))
             return ok
 
         # vertical lines crossing top and bottom edges
@@ -307,10 +310,13 @@ def bridge_lines(img: np.ndarray, words: list[Word], pad=3, reach=24) -> np.ndar
 
 
 def edge_map(img: np.ndarray) -> np.ndarray:
+    """Edges of what's drawn. Brightness edges at a low threshold catch faint
+    panel borders; per-channel colour edges need a higher one, because video
+    compression smears colour (blocky chroma noise inside coloured fills)."""
     blur = cv2.GaussianBlur(img, (3, 3), 0)
-    e = np.zeros(img.shape[:2], np.uint8)
+    e = cv2.Canny(cv2.cvtColor(blur, cv2.COLOR_BGR2GRAY), 8, 24)
     for c in cv2.split(blur):
-        e |= cv2.Canny(c, 8, 24)
+        e |= cv2.Canny(c, 24, 72)
     return e
 
 
@@ -394,6 +400,7 @@ def find_shapes(edges: np.ndarray, min_size=24) -> list[Node]:
     bridged = plain | cv2.morphologyEx(plain, cv2.MORPH_CLOSE, np.ones((1, 15), np.uint8))
     bridged |= cv2.morphologyEx(bridged, cv2.MORPH_CLOSE, np.ones((15, 1), np.uint8))
     near = cv2.dilate(plain, np.ones((5, 5), np.uint8))  # outline support tolerance
+    near_b = cv2.dilate(bridged, np.ones((5, 5), np.uint8))  # dashed outlines: judged once bridged
     contours = []
     for src, m in (("plain", plain), ("bridged", bridged)):
         contours += [(src, c) for c in cv2.findContours(m, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)[0]]
@@ -408,15 +415,17 @@ def find_shapes(edges: np.ndarray, min_size=24) -> list[Node]:
         if src == "plain" and ratio > 0.8:
             boxy.append(Node("rect", x, y, w, h))
         poly = cv2.approxPolyDP(c, 0.02 * cv2.arcLength(c, True), True)
-        if ratio > 0.88:
-            kind = "rect"
+        if ratio > 0.88 and _rect_outline_support(near if src == "plain" else near_b, x, y, w, h) > 0.75:
+            kind = "rect"  # (its outline must actually be drawn, not just enclosed)
         elif w > 3 * min_size and h > 3 * min_size and _rect_outline_support(near, x, y, w, h) > 0.92 \
                 and cv2.contourArea(cv2.convexHull(c)) / (w * h) > 0.95:
             kind = "rect"  # a container whose inside is cut into by attached lines/boxes
         elif 0.4 < w / h < 2.5 and len(poly) > 6 and _is_ellipse(c, w, h, ratio) \
                 and _outline_support(near, x, y, w, h) > 0.8:
             kind = "ellipse"
-        elif 0.42 < ratio < 0.6 and 4 <= len(poly) <= 6 and _is_diamond(c, x, y, w, h):
+        elif 0.42 < ratio < 0.6 and _is_diamond(c, x, y, w, h) and len(cv2.approxPolyDP(
+                cv2.convexHull(c), 0.04 * cv2.arcLength(cv2.convexHull(c), True), True)) == 4:
+            # corners counted on the hull: attached arrows add corners to the raw outline
             kind = "diamond"
         else:
             continue
@@ -459,8 +468,12 @@ def _fragment_of(outer: Node, inner: Node, tol=8) -> bool:
     return sum(flush) >= 3
 
 
-def _same_outline(outer: Node, inner: Node, margin=10) -> bool:
-    """Inner/outer contours of one stroked outline."""
+def _same_outline(outer: Node, inner: Node, margin=None) -> bool:
+    """Inner/outer contours of one stroked outline. The gap between them grows
+    with stroke width and, on diagonal sides (diamonds), with the slope, so the
+    tolerance scales with the shape."""
+    if margin is None:
+        margin = max(10, 0.15 * min(inner.w, inner.h))
     return (0 <= inner.x - outer.x <= margin and 0 <= inner.y - outer.y <= margin
             and 0 <= outer.x2 - inner.x2 <= margin and 0 <= outer.y2 - inner.y2 <= margin)
 
@@ -548,6 +561,18 @@ def is_photo(img: np.ndarray, n: Node) -> bool:
     return np.count_nonzero(counts) > 120 and float(q.std()) > 1.2 and dominant < 0.35
 
 
+def _is_arrowhead(patch: np.ndarray) -> bool:
+    """A solid triangle: the tip of an arrow, not an icon."""
+    cs, _ = cv2.findContours((patch > 0).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cs:
+        return False
+    c = max(cs, key=cv2.contourArea)
+    area = cv2.contourArea(c)
+    hull = cv2.contourArea(cv2.convexHull(c)) or 1
+    tri = cv2.approxPolyDP(c, 0.12 * cv2.arcLength(c, True), True)
+    return len(tri) == 3 and area / hull > 0.85 and area > 12
+
+
 def find_icons(clean: np.ndarray, words: list[Word], shapes: list[Node], conns, med_h: float) -> list[Node]:
     """Small compact ink blobs that aren't text, lines or shape outlines."""
     ink = _ink(clean)
@@ -556,13 +581,15 @@ def find_icons(clean: np.ndarray, words: list[Word], shapes: list[Node], conns, 
             cv2.rectangle(ink, (n.x - 2, n.y - 2), (n.x2 + 2, n.y2 + 2), 0, -1)
         elif n.kind == "ellipse":
             cv2.ellipse(ink, (n.x + n.w // 2, n.y + n.h // 2), (n.w // 2, n.h // 2), 0, 0, 360, 0, 7)
+        elif n.kind == "diamond":
+            cv2.polylines(ink, [_diamond_pts(n)], True, 0, 9)
         else:
             cv2.rectangle(ink, (n.x, n.y), (n.x2, n.y2), 0, 7)
             r = int(min(n.w, n.h, 48) / 2)  # rounded corners curve inside the box
             for cx, cy in ((n.x, n.y), (n.x2 - r, n.y), (n.x, n.y2 - r), (n.x2 - r, n.y2 - r)):
                 ink[cy:cy + r, cx:cx + r] = 0
-    for *_, sg in conns:
-        cv2.line(ink, (int(sg.x0), int(sg.y0)), (int(sg.x1), int(sg.y1)), 0, 9)
+    for *_, sg in conns:  # wide enough to swallow the arrowheads too
+        cv2.line(ink, (int(sg.x0), int(sg.y0)), (int(sg.x1), int(sg.y1)), 0, max(9, int(0.8 * med_h)))
     joined = cv2.dilate(ink, np.ones((5, 5), np.uint8))
     n, labels, stats, _ = cv2.connectedComponentsWithStats(joined, connectivity=8)
     lo, hi = 0.35 * med_h, 2.4 * med_h
@@ -573,6 +600,8 @@ def find_icons(clean: np.ndarray, words: list[Word], shapes: list[Node], conns, 
         if not (lo <= w <= hi and lo <= h <= hi and 0.4 < w / max(h, 1) < 2.5):
             continue
         if np.count_nonzero(ink[y:y + h, x:x + w]) < 0.06 * w * h:
+            continue
+        if _is_arrowhead(ink[y:y + h, x:x + w]):
             continue
         cx, cy = x + w / 2, y + h / 2
         if any(wd.x <= cx <= wd.x2 and wd.y <= cy <= wd.y2 for wd in words):
@@ -785,9 +814,20 @@ def _mask_shapes(ink: np.ndarray, shapes: list[Node], grow: int) -> np.ndarray:
         thick = -1 if not container else 2 * grow + 3
         if n.kind == "ellipse":
             cv2.ellipse(ink, (n.x + n.w // 2, n.y + n.h // 2), (n.w // 2 + grow, n.h // 2 + grow), 0, 0, 360, 0, thick)
+        elif n.kind == "diamond":
+            pts = _diamond_pts(n, grow)
+            if thick < 0:
+                cv2.fillPoly(ink, [pts], 0)
+            else:
+                cv2.polylines(ink, [pts], True, 0, thick)
         else:
             cv2.rectangle(ink, (n.x - grow, n.y - grow), (n.x2 + grow, n.y2 + grow), 0, thick)
     return ink
+
+
+def _diamond_pts(n: Node, grow: int = 0) -> np.ndarray:
+    cx, cy = n.x + n.w // 2, n.y + n.h // 2
+    return np.array([(cx, n.y - grow), (n.x2 + grow, cy), (cx, n.y2 + grow), (n.x - grow, cy)], np.int32)
 
 
 def _border_point(n: Node, dx: float, dy: float) -> tuple[float, float]:
@@ -834,9 +874,17 @@ def find_connectors(img: np.ndarray, clean: np.ndarray, shapes: list[Node], word
         text_mask[max(w.y - 2, 0):w.y2 + 2, max(w.x - 2, 0):w.x2 + 2] = True
 
     def has_head(tx, ty, ox, oy) -> bool:
-        """Arrowhead at (tx,ty) on a line coming from (ox,oy)?"""
+        """Arrowhead at (tx,ty) on a line coming from (ox,oy)?
+
+        Many tools stop the arrow short of the shape: walk inward from the
+        border to where the ink actually starts, and look for the head there."""
         L = math.hypot(ox - tx, oy - ty) or 1
         ux, uy = (ox - tx) / L, (oy - ty) / L
+        for k in range(0, int(min(40, 0.4 * L))):
+            px, py = int(tx + ux * k), int(ty + uy * k)
+            if 0 <= px < W and 0 <= py < H and head_ink[py, px]:
+                tx, ty = tx + ux * k, ty + uy * k
+                break
         r = 24
         x0, y0 = int(max(tx - r, 0)), int(max(ty - r, 0))
         ys, xs = np.nonzero(head_ink[y0:int(ty + r), x0:int(tx + r)])
@@ -1307,6 +1355,20 @@ def convert(img: np.ndarray, raw_words: list[Word] | None = None) -> Result:
                 return True
         return False
     shapes = [sh for sh in shapes if sh.connected or max(sh.w, sh.h) > 3 * med_h or not on_text(sh)]
+
+    # a small box that a connector runs straight through is a label's
+    # background (the label itself becomes the edge's label), not a shape
+    def on_connector(sh: Node) -> bool:
+        for a, b, _, sg in conns:
+            if sh is a or sh is b:
+                continue
+            for t in np.linspace(0.05, 0.95, 19):
+                px, py = sg.x0 + t * (sg.x1 - sg.x0), sg.y0 + t * (sg.y1 - sg.y0)
+                # through it, or along its edge (a line splitting the label box in two)
+                if sh.x - 4 < px < sh.x2 + 4 and sh.y - 4 < py < sh.y2 + 4:
+                    return True
+        return False
+    shapes = [sh for sh in shapes if sh.connected or max(sh.w, sh.h) > 3 * med_h or not on_connector(sh)]
 
     # small textless circles/squares (avatars, emoji, buttons) are icons themselves
     for sh in shapes:
