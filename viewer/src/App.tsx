@@ -13,13 +13,14 @@ const images = import.meta.glob(["../../samples/**/*.png", "!../../samples/video
 // Video samples: samples/video/NAME/{frames/NNNN.png, boards/NNNN.board, steps.json, events.log}
 // written by `python -m replicator.video`.
 const vFrames = import.meta.glob("../../samples/video/*/frames/*.png", { query: "?url", import: "default", eager: true }) as Record<string, string>;
-const vBoards = import.meta.glob("../../samples/video/*/boards/*.board", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+// boards are loaded on demand (hundreds of them across recordings)
+const vBoards = import.meta.glob("../../samples/video/*/boards/*.board", { query: "?raw", import: "default" }) as Record<string, () => Promise<string>>;
 const vSteps = import.meta.glob("../../samples/video/*/steps.json", { import: "default", eager: true }) as Record<string, Step[]>;
 const vEvents = import.meta.glob("../../samples/video/*/events.log", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
 
 type Version = "converted" | "truth";
 interface Step { t: number; action: string; frame?: number; ms_total?: number; ocr?: string }
-interface Frame { t: number; image: string; board: string; action: string; ms?: number }
+interface Frame { t: number; image: string; board: () => Promise<string>; action: string; ms?: number }
 interface Event { t: number; head: string; body: string }
 interface Sample {
   name: string;
@@ -59,7 +60,7 @@ const samples: Sample[] = (() => {
         current = {
           t: st.t, action: st.action, ms: st.ms_total,
           image: vFrames[`${dir}frames/${pad(st.frame)}.png`],
-          board: vBoards[`${dir}boards/${pad(st.frame)}.board`] ?? "",
+          board: vBoards[`${dir}boards/${pad(st.frame)}.board`] ?? (async () => ""),
         };
         frames.push(current);
       }
@@ -71,7 +72,7 @@ const samples: Sample[] = (() => {
         const [first, ...rest] = e.split("\n");
         return { t: parseTime(first.split(" ")[0]), head: first, body: rest.join("\n").trim() };
       });
-    return { name, versions: { converted: frames[0]?.board ?? "" }, image: frames[0]?.image, video: { frames, events } };
+    return { name, versions: { converted: "" }, image: frames[0]?.image, video: { frames, events } };
   });
 
   return [...videos, ...stills].sort((a, b) => a.name.localeCompare(b.name));
@@ -88,6 +89,15 @@ export default function App() {
   const [frameIdx, setFrameIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
   const fitNext = useRef(true);
+  // the dev server says when new outputs land in samples/ (never auto-reloads)
+  const [stale, setStale] = useState(false);
+  useEffect(() => {
+    const hot = import.meta.hot;
+    if (!hot) return;
+    const on = () => setStale(true);
+    hot.on("samples-changed", on);
+    return () => hot.off?.("samples-changed", on);
+  }, []);
   // Excalidraw measures text when elements are created; re-create them once
   // its fonts finish loading, or widths are computed with a fallback font.
   const [fontEpoch, setFontEpoch] = useState(0);
@@ -139,9 +149,14 @@ export default function App() {
 
   useEffect(() => {
     if (!frame) return;
-    // refit the camera when the scene is replaced, or when scrubbing by hand
-    if (frame.action.includes("KEY") || !playing) fitNext.current = true;
-    setText(frame.board);
+    let live = true;
+    frame.board().then((b) => {
+      if (!live) return;
+      // refit the camera when the scene is replaced, or when scrubbing by hand
+      if (frame.action.includes("KEY") || !playing) fitNext.current = true;
+      setText(b);
+    });
+    return () => { live = false; };
   }, [frame]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pick = (i: number, v?: Version) => {
@@ -152,7 +167,7 @@ export default function App() {
     setVersion(ver);
     setFrameIdx(0);
     setPlaying(false);
-    setText(s.video ? s.video.frames[0]?.board ?? "" : s.versions[ver] ?? "");
+    setText(s.video ? "" : s.versions[ver] ?? "");
   };
 
   const shownEvents = video ? video.events.filter((e) => frame && e.t <= frame.t + 1e-6) : [];
@@ -192,6 +207,9 @@ export default function App() {
         <label>
           <input type="checkbox" checked={sketchy} onChange={(e) => setSketchy(e.target.checked)} /> sketchy
         </label>
+        {stale && (
+          <button className="stale" onClick={() => location.reload()}>new results · reload</button>
+        )}
         <span className="stats">
           {board.w && board.h ? `${board.w}×${board.h} · ` : ""}
           {skeletons.length} elements · {text.length} chars

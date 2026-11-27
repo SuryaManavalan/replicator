@@ -40,3 +40,5 @@ main { flex: 1; display: grid; grid-template-columns: minmax(360px, 2fr) 3fr; mi
 .events .event.latest { border-left-color: #1971c2; background: #e7f5ff; }
 .events .head { font: 600 12px ui-monospace, Menlo, monospace; color: #495057; }
 .events pre { margin: 2px 0 0; font: 12px/1.45 ui-monospace, "Cascadia Code", Menlo, monospace; white-space: pre-wrap; }
+
+header .stale { border:1px solid #f59f00; background:#fff9db; color:#8a5a00; border-radius:6px; padding:3px 10px; cursor:pointer; font:inherit; }
