@@ -45,6 +45,10 @@ function autoSize(n: BoardNode): { w: number; h: number } {
     if (n.geom?.w && n.geom?.h) return { w: n.geom.w, h: n.geom.h };
     return measureText(n.text, LABEL_SIZE);
   }
+  if (n.type === "code") {
+    if (n.geom?.w && n.geom?.h) return { w: n.geom.w, h: n.geom.h };
+    return { w: Math.max(...n.lines.map((l) => l.length), 10) * 9 + 50, h: n.lines.length * 20 };
+  }
   if (n.type === "table") {
     if (n.geom?.w && n.geom?.h) return { w: n.geom.w, h: n.geom.h };
     const size = Number(n.style.size) || 16;
@@ -137,16 +141,47 @@ export function toSkeletons(board: Board, opts: RenderOptions): ConvertResult {
 
   const visit = (n: BoardNode) => {
     const b = boxes.get(n)!;
+    if (n.type === "code") {
+      // monospace lines; a faint line-number gutter when the source had one
+      const pitch = b.h / Math.max(n.lines.length, 1);
+      const gutter = n.start !== undefined ? Math.min(40, b.w * 0.08) : 0;
+      const longest = Math.max(...n.lines.map((l) => l.length), 1);
+      const size = Math.max(6, Math.min(pitch / LINE_HEIGHT, (b.w - gutter) / (longest * 0.62)));
+      skeletons.push({
+        type: "rectangle", x: b.x - 6, y: b.y - 4, width: b.w + 12, height: b.h + 8,
+        roughness: 0, strokeColor: "#ced4da", strokeWidth: 1, backgroundColor: "#f8f9fa", fillStyle: "solid",
+      });
+      n.lines.forEach((ln, i) => {
+        const y = b.y + i * pitch;
+        if (n.start !== undefined) {
+          skeletons.push({ type: "text", x: b.x, y, text: String(n.start + i), fontSize: size, fontFamily: 3, strokeColor: "#adb5bd" });
+        }
+        if (ln) skeletons.push({ type: "text", x: b.x + gutter, y, text: ln, fontSize: size, fontFamily: 3, strokeColor: "#1e1e1e" });
+      });
+      return;
+    }
     if (n.type === "table") {
-      const size = Number(n.style.size) || 16;
-      const pitch = n.rows.length > 1 ? (b.h - size * LINE_HEIGHT) / (n.rows.length - 1) : 0;
+      const size = Number(n.style.size) || (n.style.grid ? Math.min(18, b.h / Math.max(n.rows.length, 1) / 2) : 16);
+      const pitch = n.style.grid ? b.h / n.rows.length
+        : n.rows.length > 1 ? (b.h - size * LINE_HEIGHT) / (n.rows.length - 1) : 0;
+      const yOff = n.style.grid ? (b.h / n.rows.length - size * LINE_HEIGHT) / 2 : 0;
       const cols = n.cols.length ? n.cols : n.rows[0]?.map((_, c) => b.x + (c * b.w) / n.rows[0].length) ?? [];
+      if (n.style.grid) {  // ruled table: draw its cell borders
+        const edges = [...cols, b.x + b.w];
+        const rh = b.h / Math.max(n.rows.length, 1);
+        for (let r = 0; r <= n.rows.length; r++) {
+          skeletons.push({ type: "line", x: b.x, y: b.y + r * rh, points: [[0, 0], [b.w, 0]], strokeColor: "#ced4da", strokeWidth: 1, roughness: 0 });
+        }
+        for (const x of edges) {
+          skeletons.push({ type: "line", x, y: b.y, points: [[0, 0], [0, b.h]], strokeColor: "#ced4da", strokeWidth: 1, roughness: 0 });
+        }
+      }
       n.rows.forEach((row, r) => {
         row.forEach((cell, c) => {
           if (!cell) return;
           const right = c + 1 < cols.length ? cols[c + 1] - 8 : b.x + b.w;
           skeletons.push({
-            type: "text", x: cols[c] ?? b.x, y: b.y + r * pitch, text: cell,
+            type: "text", x: (cols[c] ?? b.x) + (n.style.grid ? 4 : 0), y: b.y + r * pitch + yOff, text: cell,
             fontSize: fitFont(cell, right - (cols[c] ?? b.x), size), fontFamily,
             strokeColor: "#1e1e1e",
           });

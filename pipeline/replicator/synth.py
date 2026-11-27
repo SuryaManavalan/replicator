@@ -10,6 +10,7 @@ Usage:  uv run python -m replicator.synth [outdir]
 from __future__ import annotations
 
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -17,10 +18,12 @@ from PIL import Image, ImageDraw, ImageFont
 
 import numpy as np
 
-from .board import Board, Edge, Shape, Table, Text, scale_board, serialize
+from .board import Board, Code, Edge, Shape, Table, Text, scale_board, serialize
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FONT_MONO = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+
 LINE_HEIGHT = 1.25
 LABEL_SIZE = 20
 
@@ -34,10 +37,10 @@ FILL = {
 _fonts: dict = {}
 
 
-def font(size: float, bold=False, scale=1):
-    key = (round(size * scale), bold)
+def font(size: float, bold=False, scale=1, mono=False):
+    key = (round(size * scale), bold, mono)
     if key not in _fonts:
-        _fonts[key] = ImageFont.truetype(FONT_BOLD if bold else FONT, key[0])
+        _fonts[key] = ImageFont.truetype(FONT_MONO if mono else FONT_BOLD if bold else FONT, key[0])
     return _fonts[key]
 
 
@@ -195,12 +198,86 @@ def scene_mindmap() -> Board:
     return Board(1280, 800, items, edges)
 
 
+def scene_spreadsheet() -> Board:
+    """A ruled grid: column letters, row numbers, bold shaded header row,
+    right-aligned numbers, an empty cell, a selected cell."""
+    data = [
+        ["Team", "Headcount", "Salaries", "Tools", "Travel", "Total"],
+        ["Engineering", "45", "$6,720,000", "$310,000", "$85,000", "$7,115,000"],
+        ["Design", "8", "$1,040,000", "$64,000", "", "$1,104,000"],
+        ["Marketing", "12", "$1,260,000", "$520,000", "$140,000", "$1,920,000"],
+        ["Sales", "18", "$2,160,000", "$120,000", "$260,000", "$2,540,000"],
+        ["Support", "10", "$780,000", "$52,000", "$18,000", "$850,000"],
+    ]
+    rows = [["", "A", "B", "C", "D", "E", "F"]] + [[str(i + 1)] + r for i, r in enumerate(data)]
+    x0, y0, rn_w, col_w, row_h = 40, 120, 50, 150, 36
+    cols = [x0] + [x0 + rn_w + i * col_w for i in range(6)]
+    w = rn_w + 6 * col_w
+    align = ["c", "l", "r", "r", "r", "r", "r"]
+    t = Table(x0, y0, w, row_h * len(rows), cols, rows,
+              {"grid": True, "header": True, "_align": align, "_row_h": row_h, "_sel": (4, 4)})
+    return Board(1280, 800, [
+        text("Budget 2027", 40, 30, 28, bold=True),
+        text("fx  $520,000", 40, 80, 16),
+        t,
+    ], [])
+
+
+CODE_LINES = [
+    'import express from "express";',
+    'import { pool } from "./db";',
+    "",
+    "const app = express();",
+    "app.use(express.json());",
+    "",
+    'app.get("/users/:id", async (req, res) => {',
+    "  const { rows } = await pool.query(sql, [req.params.id]);",
+    "  if (!rows.length) {",
+    '    return res.status(404).json({ error: "not found" });',
+    "  }",
+    "  res.json(rows[0]);",
+    "});",
+    "",
+    "app.listen(3000);",
+]
+
+
+def scene_code() -> Board:
+    """Dark editor: line-number gutter, indented code, blank lines, syntax colours."""
+    tree = rect(None, 0, 0, 230, 800, [
+        text("EXPLORER", 20, 16, 13, bold=True),
+        text("src", 30, 50, 15), text("db.ts", 46, 78, 15), text("server.ts", 46, 106, 15), text("routes.ts", 46, 134, 15),
+    ], fill="black", stroke="gray")
+    code = Code(250, 60, 900, 15 * 26, list(CODE_LINES), start=1, style={"_theme": "dark", "_pitch": 26})
+    return Board(1280, 800, [tree, text("server.ts", 260, 18, 15), code], [])
+
+
+def scene_plain_table() -> Board:
+    """No vertical rules, row separators only; left/right/centre aligned columns,
+    multi-word cells, an empty cell."""
+    rows = [
+        ["ID", "Service", "Summary", "Owner", "Status"],
+        ["INC-312", "checkout", "Payment provider timeouts", "Priya N.", "Critical"],
+        ["INC-311", "billing", "Invoice job retries spiking", "", "Investigating"],
+        ["INC-310", "search", "Index lag above 5 min", "Marcus W.", "Resolved"],
+        ["INC-309", "auth", "Token refresh 502s", "Dana K.", "Resolved"],
+        ["INC-308", "api", "Rate limiter misconfigured", "Priya N.", "Resolved"],
+    ]
+    cols = [80, 220, 380, 760, 960]
+    t = Table(80, 140, 1100, 6 * 48, cols, rows,
+              {"header": True, "_align": ["l", "l", "l", "l", "c"], "_row_h": 48, "_rules": True, "_right": 1180})
+    return Board(1280, 800, [text("Recent incidents", 80, 80, 26, bold=True), t], [])
+
+
 SCENES = {
     "01-flow": scene_flow,
     "02-architecture": scene_architecture,
     "03-dashboard": scene_dashboard,
     "04-kanban": scene_kanban,
     "05-mindmap": scene_mindmap,
+    "06-spreadsheet": scene_spreadsheet,
+    "07-code": scene_code,
+    "08-plain-table": scene_plain_table,
 }
 
 
@@ -287,6 +364,60 @@ def draw_board(board: Board, scale=2) -> Image.Image:
         img.paste(Image.fromarray(arr.astype(np.uint8)), (int(n.x * S), int(n.y * S)))
 
     def draw(node):
+        if isinstance(node, Code):
+            pitch = node.style.get("_pitch", 24)
+            gut = 60
+            d.rectangle(P(node.x, node.y - 8, node.x + node.w, node.y + node.h + 8), fill="#1e1e1e")
+            fm = font(15, scale=S, mono=True)
+            for i, ln in enumerate(node.lines):
+                cy = node.y + i * pitch + pitch / 2
+                d.text(P(node.x + gut - 14, cy), str((node.start or 1) + i), font=fm, fill="#858585", anchor="rm")
+                xx = node.x + gut + 10
+                for tok in re.split(r"(\s+|[(){}\[\];,.])", ln):
+                    if not tok:
+                        continue
+                    colr = ("#569cd6" if tok in ("import", "from", "const", "async", "await", "return", "if") else
+                            "#ce9178" if tok.startswith('"') or tok.endswith('"') else
+                            "#b5cea8" if tok.isdigit() else "#d4d4d4")
+                    d.text(P(xx, cy), tok, font=fm, fill=colr, anchor="lm")
+                    xx += fm.getlength(tok) / S
+            return
+        if isinstance(node, Table) and node.style.get("_row_h"):
+            rh = node.style["_row_h"]
+            align = node.style.get("_align", ["l"] * len(node.cols))
+            right = node.style.get("_right", node.x + node.w)
+            bounds = list(node.cols) + [right]
+            grid = node.style.get("grid")
+            if grid:  # shaded header row and row-number column
+                d.rectangle(P(node.x, node.y, right, node.y + rh), fill="#f1f3f4")
+                d.rectangle(P(node.x, node.y, bounds[1], node.y + rh * len(node.rows)), fill="#f1f3f4")
+                d.rectangle(P(bounds[1], node.y + rh, right, node.y + 2 * rh), fill="#e8f0fe")
+            for i, row in enumerate(node.rows):
+                for c, val in enumerate(row):
+                    if not val:
+                        continue
+                    bold = node.style.get("header") and (i == (1 if grid else 0)) and c > 0 if grid else (i == 0)
+                    f = font(16, bold)
+                    cy = node.y + i * rh + rh / 2
+                    a, b = bounds[c], bounds[c + 1]
+                    if align[c] == "r":
+                        d.text(P(b - 10, cy), val, font=f, fill="#1e1e1e", anchor="rm")
+                    elif align[c] == "c":
+                        d.text(P((a + b) / 2, cy), val, font=f, fill="#1e1e1e", anchor="mm")
+                    else:
+                        d.text(P(a + 10, cy), val, font=f, fill="#1e1e1e", anchor="lm")
+            line = "#c8cbcf"
+            for i in range(len(node.rows) + 1):
+                y = node.y + i * rh
+                if grid or node.style.get("_rules"):
+                    d.line(P(node.x, y, right, y), fill=line if grid else "#e5e7eb", width=S)
+            if grid:
+                for b in bounds:
+                    d.line(P(b, node.y, b, node.y + rh * len(node.rows)), fill=line, width=S)
+                sr, sc = node.style.get("_sel", (None, None))
+                if sr is not None:
+                    d.rectangle(P(bounds[sc], node.y + sr * rh, bounds[sc + 1], node.y + (sr + 1) * rh), outline="#1a73e8", width=2 * S)
+            return
         if isinstance(node, Table):
             size = float(node.style.get("size", 16))
             pitch = (node.h - size * LINE_HEIGHT) / max(len(node.rows) - 1, 1)

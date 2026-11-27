@@ -17,6 +17,11 @@ function watchSamples() {
       let timer: NodeJS.Timeout | undefined;
       watch(samples, { recursive: true }, (_event, file) => {
         if (!file) return;
+        // Vite caches every imported file as a module; samples/ is outside its
+        // own watcher, so drop the stale copy of anything that changed.
+        for (const mod of server.moduleGraph.getModulesByFile(resolve(samples, file)) ?? []) {
+          server.moduleGraph.invalidateModule(mod);
+        }
         const finished = /steps\.json$/.test(file) || (/\.board$/.test(file) && !/\/boards\//.test(file));
         if (!finished) return;
         clearTimeout(timer);

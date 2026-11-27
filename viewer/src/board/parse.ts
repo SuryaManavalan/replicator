@@ -36,7 +36,17 @@ export interface TableNode {
   line: number;
 }
 
-export type BoardNode = ShapeNode | TextNode | TableNode;
+/** Code: exact lines (indentation kept); `start` = first line number shown. */
+export interface CodeNode {
+  type: "code";
+  geom?: Geom;
+  start?: number;
+  lines: string[];
+  style: Style;
+  line: number;
+}
+
+export type BoardNode = ShapeNode | TextNode | TableNode | CodeNode;
 export type Ref = { id: string } | { label: string };
 
 export interface EdgeNode {
@@ -171,6 +181,13 @@ export function parse(src: string): Board {
     stack.length = Math.min(stack.length, depth);
     const parent = depth > 0 ? stack[depth - 1] : undefined;
 
+    // code line: "  return x;"
+    if (parent?.type === "code") {
+      if (first.t !== "str") return err("code lines are quoted strings");
+      parent.lines.push(first.v);
+      return;
+    }
+
     // table row: "a" | "b" | "c"
     if (parent?.type === "table") {
       const cells: string[] = [];
@@ -211,7 +228,18 @@ export function parse(src: string): Board {
     }
 
     let node: BoardNode;
-    if (first.t === "word" && first.v === "table") {
+    if (first.t === "word" && first.v === "code") {
+      let start: number | undefined;
+      const rest: Tok[] = [];
+      for (let i = 1; i < toks.length; i++) {
+        const k = toks[i];
+        if (k.t === "word" && k.v === "from" && toks[i + 1]?.t === "nums") start = (toks[++i] as { v: number[] }).v[0];
+        else rest.push(k);
+      }
+      const { geom, style, rest: extra } = tail(rest, 0);
+      if (extra.length) err("unexpected tokens after code");
+      node = { type: "code", geom, start, lines: [], style, line };
+    } else if (first.t === "word" && first.v === "table") {
       let cols: number[] = [];
       const rest: Tok[] = [];
       for (let i = 1; i < toks.length; i++) {

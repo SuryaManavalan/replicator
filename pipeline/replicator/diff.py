@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .board import Board, Shape, Table, Text, _geom, _style, quote
+from .board import Board, Code, Shape, Table, Text, _geom, _style, quote
 
 SKIP = ("icon", "icons", "group", "image")  # layout/decoration: not worth announcing
 SHAPES = ("rect", "ellipse", "diamond")  # a hover can turn a pill "rect" into an "ellipse": same thing
@@ -34,6 +34,9 @@ class Entry:
     line: str  # how to print it when added
     cells: list[str] | None = None
     unsure: bool = False  # OCR flagged it [?]: don't announce it on its own
+    row_name: str = ""  # table rows: what to call this row in a change
+    col_names: list[str] | None = None  # table rows: what to call each column
+    lineno: int | None = None  # code lines
 
     @property
     def ref(self) -> str:
@@ -59,9 +62,17 @@ def entries(board: Board) -> list[Entry]:
                                      unsure=bool(n.style.get("?"))))
             elif isinstance(n, Table):
                 pitch = n.h / max(len(n.rows), 1)
+                cols = _col_names(n.rows)
                 for i, row in enumerate(n.rows):
                     txt = " | ".join(quote(c) for c in row)
-                    out.append(Entry("row", txt, n.x, n.y + i * pitch, n.w, pitch, f"row {txt}", list(row)))
+                    out.append(Entry("row", txt, n.x, n.y + i * pitch, n.w, pitch, f"row {txt}", list(row),
+                                     row_name=_row_name(row), col_names=cols))
+            elif isinstance(n, Code):
+                pitch = n.h / max(len(n.lines), 1)
+                for i, ln in enumerate(n.lines):
+                    no = (n.start or 1) + i
+                    out.append(Entry("code", ln, n.x, n.y + i * pitch, n.w, pitch,
+                                     f"line {no}: {quote(ln)}", lineno=no if n.start is not None else None))
             elif isinstance(n, Shape):
                 if n.kind not in SKIP and (n.label or n.kind not in SHAPES):
                     label = n.label or ""
@@ -83,6 +94,25 @@ def norm(text: str) -> str:
     spacing and stray punctuation dropped."""
     t = text.translate(_CONFUSABLE).lower()
     return re.sub(r"[\s.,:;'\"`~^*_\-]+", "", t)
+
+
+def _row_name(row: list[str]) -> str:
+    """How a person names a row: its first cell, unless that's a bare row
+    number (spreadsheet chrome), then the next one."""
+    cells = [c for c in row if c]
+    if cells and cells[0].isdigit() and len(cells) > 1:
+        return cells[1]
+    return cells[0] if cells else ""
+
+
+def _col_names(rows: list[list[str]]) -> list[str]:
+    """Column names: the header row, unless it's spreadsheet column letters
+    (A, B, C...), then the row below."""
+    head = rows[0]
+    letters = sum(1 for c in head if c and len(c) <= 2 and c.isalpha()) >= 0.6 * max(1, sum(1 for c in head if c))
+    if letters and len(rows) > 1:
+        return [b or a for a, b in zip(head, rows[1] + [""] * len(head))]
+    return list(head)
 
 
 def _same_kind(a: Entry, b: Entry) -> bool:
@@ -130,7 +160,7 @@ def diff(old: Board, new: Board, key_ratio: float = 0.5) -> list[str] | None:
         o = min(cands, key=lambda o: _centre_dist(o, e))
         left.remove(o)
         right.remove(e)
-        if _centre_dist(o, e) > move_tol and e.kind != "row":  # rows re-flow when one is inserted
+        if _centre_dist(o, e) > move_tol and e.kind not in ("row", "code"):  # rows/lines re-flow on insert
             moved.append((o, e))
         else:
             same.append(e)
@@ -148,11 +178,19 @@ def diff(old: Board, new: Board, key_ratio: float = 0.5) -> list[str] | None:
             right.remove(e)
             changed.append((o, e))
 
+    # 2a'. code: the same line number with different text: that line changed
+    for e in [e for e in right if e.kind == "code" and e.lineno is not None]:
+        cands = [o for o in left if o.kind == "code" and o.lineno == e.lineno]
+        if cands:
+            left.remove(cands[0])
+            right.remove(e)
+            changed.append((cands[0], e))
+
     # 2b. same kind in the same place, different text: changed in place
     for e in list(right):
         if not e.text:
             continue  # unlabelled: handled in 2c
-        cands = [o for o in left if _same_kind(o, e) and e.kind != "row" and o.text and _iou(o, e) > 0.5]
+        cands = [o for o in left if _same_kind(o, e) and e.kind not in ("row", "code") and o.text and _iou(o, e) > 0.5]
         if not cands:
             continue
         o = max(cands, key=lambda o: _iou(o, e))
@@ -190,9 +228,16 @@ def diff(old: Board, new: Board, key_ratio: float = 0.5) -> list[str] | None:
         if o.text == e.text:
             continue
         if e.kind == "row" and o.cells and e.cells and len(o.cells) == len(e.cells):
-            for oc, ec in zip(o.cells, e.cells):
+            for j, (oc, ec) in enumerate(zip(o.cells, e.cells)):
                 if oc != ec:
-                    lines.append(f"~ {quote(oc)} -> {quote(ec)} (row {quote(e.cells[0])})")
+                    where = f"row {quote(e.row_name)}"
+                    col = e.col_names[j] if e.col_names and j < len(e.col_names) else ""
+                    if col:
+                        where += f", col {quote(col)}"
+                    lines.append(f"~ {quote(oc)} -> {quote(ec)} ({where})")
+        elif e.kind == "code":
+            at = f"line {e.lineno}: " if e.lineno is not None else ""
+            lines.append(f"~ {at}{quote(o.text)} -> {quote(e.text)}")
         elif e.kind == "text":
             lines.append(f"~ {quote(o.text)} -> {quote(e.text)}")
         else:

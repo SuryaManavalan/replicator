@@ -47,13 +47,37 @@ const SNAPSHOT = () => {
     if (!el || el.closest("script,style,noscript,#__cursor")) continue;
     const cs = getComputedStyle(el);
     if (cs.visibility === "hidden" || cs.display === "none" || Number(cs.opacity) === 0) continue;
+    // the browser's own check: also catches hidden ancestors, content-visibility
+    // (e.g. collapsed sections on mobile Wikipedia) and zero opacity up the tree
+    if (el.checkVisibility && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true, contentVisibilityAuto: true })) continue;
     const r = document.createRange();
     r.selectNodeContents(n);
     const rects = [...r.getClientRects()].filter((b) => b.width > 1 && b.height > 1 && b.bottom > 0 && b.top < vh && b.right > 0 && b.left < vw);
     if (!rects.length) continue;
     out.push({ text, boxes: rects.map((b) => [Math.round(b.left), Math.round(b.top), Math.round(b.width), Math.round(b.height)]) });
   }
-  return { url: location.href, scrollY: Math.round(scrollY), items: out };
+  // Structure: visible tables as cell grids, and code blocks line by line.
+  const vis = (r) => r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
+  const box = (r) => [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)];
+  const tables = [];
+  for (const t of document.querySelectorAll("table")) {
+    const r = t.getBoundingClientRect();
+    if (!vis(r) || (t.checkVisibility && !t.checkVisibility({ checkVisibilityCSS: true }))) continue;
+    const rows = [];
+    for (const tr of t.rows) {
+      const rr = tr.getBoundingClientRect();
+      if (!vis(rr)) continue;
+      rows.push({ box: box(rr), cells: [...tr.cells].map((c) => c.innerText.replace(/\s+/g, " ").trim()) });
+    }
+    if (rows.length) tables.push({ box: box(r), fully_visible: r.top >= 0 && r.bottom <= vh, rows });
+  }
+  const code = [];
+  for (const pre of document.querySelectorAll("pre")) {
+    const r = pre.getBoundingClientRect();
+    if (!vis(r)) continue;
+    code.push({ box: box(r), fully_visible: r.top >= 0 && r.bottom <= vh, lines: pre.innerText.replace(/\n$/, "").split("\n") });
+  }
+  return { url: location.href, scrollY: Math.round(scrollY), items: out, tables, code };
 };
 
 function makeHelpers(p) {

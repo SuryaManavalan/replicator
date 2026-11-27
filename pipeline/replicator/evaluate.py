@@ -11,7 +11,7 @@ from pathlib import Path
 
 import cv2
 
-from .board import Board, Shape, Table, Text
+from .board import Board, Code, Shape, Table, Text
 from .convert import convert, tidy_board
 from .synth import SCENES, draw_board
 
@@ -32,6 +32,8 @@ def strings(b: Board) -> Counter:
             c.update(n.text.split("\n"))
         elif isinstance(n, Table):
             c.update(v for row in n.rows for v in row if v)
+        elif isinstance(n, Code):
+            c.update(l.strip() for l in n.lines if l.strip())
         elif n.label:
             c.update(n.label.split("\n"))
     c.update(e.label for e in b.edges if e.label)
@@ -50,6 +52,56 @@ def name(s: Shape) -> str:
         return s.label
     texts = [c.text for c in s.children if isinstance(c, Text)]
     return texts[0] if texts else f"@{round(s.x)},{round(s.y)}"
+
+
+def structure(truth: Board, pred: Board, verbose=False):
+    """Tables and code are data: score them exactly.
+    Returns (cells right, cells total, tables exact, tables) and (lines right, lines total, blocks exact, blocks)."""
+    from .diff import norm
+
+    def best(t, kind):
+        cands = [n for n in walk(pred.items) if isinstance(n, kind)]
+        return max(cands, key=lambda p: iou(t, p), default=None)
+
+    cells = [0, 0, 0, 0]
+    for t in (n for n in walk(truth.items) if isinstance(n, Table)):
+        cells[3] += 1
+        total = sum(len(r) for r in t.rows)
+        cells[1] += total
+        p = best(t, Table)
+        if p is None or iou(t, p) < 0.3:
+            if verbose: print("    table missing")
+            continue
+        hit = sum(1 for i, r in enumerate(t.rows) for j, v in enumerate(r)
+                  if i < len(p.rows) and j < len(p.rows[i]) and norm(p.rows[i][j]) == norm(v))
+        cells[0] += hit
+        exact = hit == total and len(p.rows) == len(t.rows) and all(len(a) == len(b) for a, b in zip(p.rows, t.rows))
+        cells[2] += exact
+        if verbose and not exact:
+            for i, r in enumerate(t.rows):
+                pr = p.rows[i] if i < len(p.rows) else []
+                if [norm(x) for x in pr] != [norm(x) for x in r]:
+                    print(f"    row {i}: truth {r}\n           pred  {pr}")
+            if len(p.rows) > len(t.rows):
+                print(f"    extra rows: {p.rows[len(t.rows):]}")
+    lines = [0, 0, 0, 0]
+    for t in (n for n in walk(truth.items) if isinstance(n, Code)):
+        lines[3] += 1
+        lines[1] += len(t.lines)
+        p = best(t, Code)
+        if p is None or iou(t, p) < 0.3:
+            if verbose: print("    code block missing")
+            continue
+        hit = sum(1 for a, b in zip(t.lines, p.lines) if a == b)
+        lines[0] += hit
+        exact = hit == len(t.lines) and len(p.lines) == len(t.lines) and p.start == t.start
+        lines[2] += exact
+        if verbose and not exact:
+            if p.start != t.start: print(f"    start: truth {t.start} pred {p.start}")
+            for i, a in enumerate(t.lines):
+                b = p.lines[i] if i < len(p.lines) else None
+                if a != b: print(f"    line {i + 1}: truth {a!r}\n            pred  {b!r}")
+    return cells, lines
 
 
 def score(truth: Board, pred: Board, verbose=False):
@@ -110,7 +162,7 @@ def score(truth: Board, pred: Board, verbose=False):
 
 def main():
     verbose = "-v" in sys.argv
-    print(f"{'scene':18} {'text R/P':>12} {'shapes R/P':>12} {'edges R/P':>12}")
+    print(f"{'scene':18} {'text R/P':>12} {'shapes R/P':>12} {'edges R/P':>12} {'table cells':>12} {'code lines':>11}")
     for name_, build in SCENES.items():
         truth = tidy_board(build())
         img = cv2.imread(str(SAMPLES / f"{name_}.png"))
@@ -119,8 +171,11 @@ def main():
             img = cv2.imread(str(SAMPLES / f"{name_}.png"))
         pred = convert(img).board
         (t, s, e) = score(truth, pred, verbose)
+        cells, lines = structure(truth, pred, verbose)
         f = lambda p: f"{p[0]:.2f}/{p[1]:.2f}"
-        print(f"{name_:18} {f(t):>12} {f(s):>12} {f(e) if truth.edges else '—':>12}")
+        cs = f"{cells[0]}/{cells[1]}" + (" ✓" if cells[2] == cells[3] else "") if cells[3] else "—"
+        ls = f"{lines[0]}/{lines[1]}" + (" ✓" if lines[2] == lines[3] else "") if lines[3] else "—"
+        print(f"{name_:18} {f(t):>12} {f(s):>12} {f(e) if truth.edges else '—':>12} {cs:>12} {ls:>11}")
         if verbose:
             print()
 

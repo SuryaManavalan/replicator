@@ -18,7 +18,7 @@ class Shape:
     h: float
     label: str | None = None
     id: str | None = None
-    children: list[Shape | Text | Table] = field(default_factory=list)
+    children: list[Shape | Text | Table | Code] = field(default_factory=list)
     style: dict[str, str | bool] = field(default_factory=dict)
 
 
@@ -31,6 +31,19 @@ class Table:
     h: float
     cols: list[float]
     rows: list[list[str]]
+    style: dict[str, str | bool] = field(default_factory=dict)
+
+
+@dataclass
+class Code:
+    """A block of code: exact lines (indentation preserved). `start` is the
+    first line number when the editor shows a line-number gutter."""
+    x: float
+    y: float
+    w: float
+    h: float
+    lines: list[str]
+    start: int | None = None
     style: dict[str, str | bool] = field(default_factory=dict)
 
 
@@ -57,7 +70,7 @@ class Edge:
 class Board:
     w: int
     h: int
-    items: list[Shape | Text | Table] = field(default_factory=list)
+    items: list[Shape | Text | Table | Code] = field(default_factory=list)
     edges: list[Edge] = field(default_factory=list)
 
 
@@ -229,6 +242,13 @@ def serialize(board: Board, geometry: str = "full") -> str:
             pad = "  " * depth
             if isinstance(node, Text):
                 lines.append(f"{pad}{quote(node.text)}{g(node)}{_style(node.style)}")
+            elif isinstance(node, Code):
+                head = f"{pad}code{g(node)}"
+                if node.start is not None:
+                    head += f" from {node.start}"
+                lines.append(head + _style(node.style))
+                for ln in node.lines:
+                    lines.append(f"{pad}  {quote(ln)}")
             elif isinstance(node, Table):
                 cols = ",".join(str(round(c)) for c in node.cols)
                 lines.append(f"{pad}table{g(node)} cols {cols}{_style(node.style)}")

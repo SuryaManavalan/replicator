@@ -26,7 +26,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .board import Board, Edge, Shape, Table, Text, _gaps, _split, scale_board, serialize
+from .board import Board, Code, Edge, Shape, Table, Text, _gaps, _split, scale_board, serialize
+from .structure import find_aligned_tables, find_code_blocks, find_grid_tables, reread_code_lines, reread_empty_cells
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / ".cache"
@@ -335,6 +336,7 @@ class Node:
     connected: bool = False
     fill: str | None = None
     shape: Shape | None = None
+    payload: object = None  # Table / Code for structured blocks
 
     @property
     def area(self): return self.w * self.h
@@ -1085,7 +1087,7 @@ def prune(n: Node) -> tuple[list[Node], list[Word]]:
         n.words += loose
     n.kids = kids
     items = len(n.words) + len(kids)
-    if items == 0 and not n.connected and n.kind not in ("icon", "image"):
+    if items == 0 and not n.connected and n.kind not in ("icon", "image", "table", "code"):
         return [], []
     if n.implicit and items <= 1 and not n.connected:
         return kids, n.words  # separates nothing: dissolve
@@ -1238,11 +1240,18 @@ def group_columns(items: list, min_gap: float, depth: int = 0, ref_h: float | No
 
 
 def to_board(root: Node, W: int, H: int, connectors) -> Board:
+    med = float(np.median([w.h for n in [root] for w in n.words] or [20]))
+
+    def find_tables(words):
+        return find_aligned_tables(words, med)
+
     def texts(words: list[Word]):
         tables, rest = find_tables(words)
         return [_text(w) for w in merge_lines(rest)] + tables
 
-    def build(n: Node) -> Shape:
+    def build(n: Node):
+        if n.kind in ("table", "code"):
+            return n.payload
         tables, rest = find_tables(n.words)
         words = merge_lines(rest)
         style = {"fill": n.fill} if n.fill else {}
@@ -1296,19 +1305,42 @@ def convert(img: np.ndarray, raw_words: list[Word] | None = None) -> Result:
     raw = [Word(**w.__dict__) for w in raw_words] if raw_words is not None else ocr(img)
     lap("ocr")
     glyphs = all_words(raw)
+    clean = bridge_lines(erase_text(img, glyphs), glyphs)
+    labels_ok = [Word(**w.__dict__) for w in glyphs if w.score >= 0.6]
+    mark_bold(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), labels_ok)
+    med_h_raw = float(np.median([w.h for w in labels_ok])) if labels_ok else 20.0
+    # Structured blocks first, before icon/badge/shape logic can misread them:
+    # 1. ruled tables, from the image's lines (text erased);
+    grid_found = find_grid_tables(cv2.cvtColor(clean, cv2.COLOR_BGR2GRAY), labels_ok, med_h_raw)
+    reread_empty_cells(img, grid_found, _get_engine()._load_rec_model(), med_h_raw)
+    for f in grid_found:  # header: first row written in bold
+        first = [w for w in f.words if f.y - 2 <= w.cy <= f.y + f.h / max(len(f.block.rows), 1)]
+        if first and sum(w.bold for w in first) > len(first) / 2:
+            f.block.style["header"] = True
+    in_grid = {id(w) for f in grid_found for w in f.words}
+    # 2. code (line-number gutters) among what's left: a sheet's row numbers
+    #    are inside its grid, not a code gutter.
+    code_found = find_code_blocks([w for w in labels_ok if id(w) not in in_grid], med_h_raw)
+    reread_code_lines(img, code_found, _get_engine()._load_rec_model())
+    protected = {(w.x, w.y) for f in code_found + grid_found for w in f.words}
     # icons misread as a glyph or two, whatever OCR's confidence
-    labels_ok = [w for w in glyphs if w.score >= 0.6]
-    _, guessed = misread_icons(glyphs, [])
+    _, guessed = misread_icons([g for g in glyphs if (g.x, g.y) not in protected], [])
     guessed_ids = {(g.x, g.y) for g in guessed}
     words = clean_words([Word(**w.__dict__) for w in raw if (w.x, w.y) not in guessed_ids])
     mark_bold(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), words)
-    clean = bridge_lines(erase_text(img, glyphs), glyphs)
+    words = [w for w in words if (w.x, w.y) not in protected]
+    structures = [Node(("table" if isinstance(f.block, Table) else "code"), f.x, f.y, f.w, f.h, payload=f.block)
+                  for f in code_found + grid_found]
     lap("erase_text")
     edges = edge_map(clean)
     lap("edges")
     shapes = find_shapes(edges)
+    # a table's cells and a code block's lines are not shapes
+    def in_structure(n: Node) -> bool:
+        return any(st.contains(n, 4) or iou(st, n) > 0.85 for st in structures)
+    shapes = [n for n in shapes if not in_structure(n)]
     lap("shapes")
-    regions = find_regions(edges, shapes)
+    regions = [r for r in find_regions(edges, shapes) if not in_structure(r)]
     lap("regions")
 
     bg_bgr = np.median(clean.reshape(-1, 3), axis=0)
@@ -1380,7 +1412,8 @@ def convert(img: np.ndarray, raw_words: list[Word] | None = None) -> Result:
     icons = [i for i in icons if not any(sh.kind == "icon" and sh.contains(i, 2) for sh in shapes)]
 
     lap("icons")
-    root = build_tree(W, H, shapes + regions + icons, words)
+    icons = [i for i in icons if not any(st.contains(i, 4) for st in structures)]
+    root = build_tree(W, H, shapes + regions + icons + structures, words)
 
     # Free text sitting on a connector becomes its label.
     labelled = []

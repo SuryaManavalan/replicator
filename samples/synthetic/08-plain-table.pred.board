@@ -1,0 +1,10 @@
+board 1000x625
+
+"Recent incidents" @60,62 193x26
+table @63,121 860x202 cols 67,138,256,494,725
+  "ID" | "Service" | "Summary" | "Owner" | "Status"
+  "INC-312" | "checkout" | "Payment provider timeouts" | "Priya N." | "Critical"
+  "INC-311" | "billing" | "Invoice job retries spiking" | "" | "Investigating"
+  "INC-310" | "search" | "Index lag above 5 min" | "Marcus W." | "Resolved"
+  "INC-309" | "auth" | "Token refresh 502s" | "Dana K." | "Resolved"
+  "INC-308" | "api" | "Rate limiter misconfigured" | "Priya N." | "Resolved"

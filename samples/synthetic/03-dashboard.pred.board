@@ -8,8 +8,8 @@ rect @2,2 996x46 [fill=gray]
 rect @2,52 168x572
   "Overview" @39,72 81x22 [bold icon]
   "Reports" @37,107 64x22 [icon]
-  "Customers" @38,141 83x21 [icon]
-  "Billing" @35,171 57x30 [icon]
+  "Customers" @38,141 83x21
+  "Billing" @35,171 57x30
   "Help" @12,573 44x27
 "Overview" @200,73 134x31 [bold]
 rect @202,123 238x112
@@ -23,7 +23,7 @@ rect @717,123 238x112
   "2.1%" @727,169 94x38 [bold]
 rect @202,264 753x316
   "Recent orders" @214,279 134x23 [bold]
-  table @213,323 554x180 cols 214,323,527,698 [size=17]
+  table @213,323 554x180 cols 213,295,471,643 [size=17]
     "Order" | "Customer" | "Amount" | "Status"
     "#1042" | "Jane Cooper" | "$120.00" | "Shipped"
     "#1041" | "Wade Warren" | "$89.50" | "Pending"

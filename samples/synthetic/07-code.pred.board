@@ -1,0 +1,24 @@
+board 1000x625
+
+rect @0,0 181x625
+  "EXPLORER" @14,12 63x13 [bold]
+  "src" @20,40 23x15
+  "db.ts\nserver.ts\nroutes.ts" @32,59 59x62
+"server.ts" @199,13 56x16
+rect @195,40 705x320
+  code @213,48 448x302 from 1
+    "import express from \"express\";"
+    "import { pool } from \"./db\";"
+    ""
+    "const app = express();"
+    "app.use(express.json());"
+    ""
+    "app.get(\"/users/:id\", async (req, res) => {"
+    "  const { rows } = await pool.query(sql, [req.params.id]);"
+    "  if (!rows.length) {"
+    "    return res.status(404).json({ error: \"not found\" });"
+    "  }"
+    "  res.json(rows[0]);"
+    "});"
+    ""
+    "app.listen(3000);"
